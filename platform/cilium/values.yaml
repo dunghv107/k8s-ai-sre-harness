@@ -1,0 +1,21 @@
+k8sServiceHost: k3d-homelab-server-0
+k8sServicePort: 6443
+# k3s keeps kube-proxy; full replacement is not needed for a 3-node lab.
+kubeProxyReplacement: false
+ipam:
+  mode: kubernetes
+operator:
+  replicas: 1
+policyEnforcementMode: default
+hubble:
+  enabled: true
+  relay:
+    enabled: true
+  ui:
+    enabled: true
+  metrics:
+    enabled: [dns, drop, tcp, flow, "httpV2:exemplars=true"]
+    serviceMonitor:
+      enabled: false
+prometheus:
+  enabled: true

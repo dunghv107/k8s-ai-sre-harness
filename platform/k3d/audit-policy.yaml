@@ -1,0 +1,18 @@
+apiVersion: audit.k8s.io/v1
+kind: Policy
+omitStages: [RequestReceived]
+rules:
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: [secrets]
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: [pods/exec, pods/attach, pods/portforward]
+  - level: Metadata
+    verbs: [create, update, patch, delete]
+    resources:
+      - group: rbac.authorization.k8s.io
+  # Everything else is noise for the alert rules and would only grow the log.
+  - level: None

@@ -1,0 +1,35 @@
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: homelab
+servers: 1
+agents: 2
+image: rancher/k3s:v1.35.5-k3s1
+ports:
+  - port: 127.0.0.1:8443:443
+    nodeFilters: [loadbalancer]
+options:
+  k3d:
+    wait: true
+    timeout: 180s
+  k3s:
+    extraArgs:
+      # Cilium owns pod networking and NetworkPolicy (decision D-02).
+      - arg: --flannel-backend=none
+        nodeFilters: [server:*]
+      - arg: --disable-network-policy
+        nodeFilters: [server:*]
+      # Traefik comes from Helm with Gateway API, not the bundled one.
+      - arg: --disable=traefik
+        nodeFilters: [server:*]
+      - arg: --kube-apiserver-arg=audit-policy-file=/etc/homelab/audit-policy.yaml
+        nodeFilters: [server:*]
+      - arg: --kube-apiserver-arg=audit-log-path=/var/log/kubernetes/audit.log
+        nodeFilters: [server:*]
+      - arg: --kube-apiserver-arg=audit-log-maxsize=50
+        nodeFilters: [server:*]
+      - arg: --kube-apiserver-arg=audit-log-maxbackup=2
+        nodeFilters: [server:*]
+  kubeconfig:
+    updateDefaultKubeconfig: true
+    switchCurrentContext: true
