@@ -1,0 +1,10 @@
+.main { max-width: 720px; margin: 2rem auto; padding: 0 1rem; font-family: system-ui, sans-serif; color: #1a1a1a; }
+.hint { color: #666; }
+.buttons { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1rem 0; }
+.buttons button { padding: 0.5rem 0.9rem; border: 1px solid #888; border-radius: 6px; background: #f4f4f4; cursor: pointer; }
+.buttons button:hover:not(:disabled) { background: #e6e6e6; }
+.buttons button:disabled { opacity: 0.5; cursor: wait; }
+.result { border: 1px solid #ddd; border-radius: 8px; padding: 0.5rem 1rem; }
+.result pre { background: #f7f7f7; padding: 0.75rem; overflow: auto; max-height: 24rem; }
+.ok { color: #1a7f37; font-weight: 600; }
+.bad { color: #c62828; font-weight: 600; }

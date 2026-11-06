@@ -1,0 +1,57 @@
+deploymentMode: SingleBinary
+# shortcut: one replica, filesystem storage on a local-path PVC; move to object storage + replicas for real retention.
+singleBinary:
+  replicas: 1
+  persistence:
+    enabled: true
+    size: 2Gi
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 512Mi}
+backend: {replicas: 0}
+read: {replicas: 0}
+write: {replicas: 0}
+# Scaled-out components and helpers a laptop does not need.
+chunksCache: {enabled: false}
+resultsCache: {enabled: false}
+lokiCanary: {enabled: false}
+gateway: {enabled: false}
+minio: {enabled: false}
+test: {enabled: false}
+
+loki:
+  # Single tenant: Alloy and falcosidekick push without an org header.
+  auth_enabled: false
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+  schemaConfig:
+    configs:
+      - from: "2024-04-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index: {prefix: index_, period: 24h}
+  limits_config:
+    retention_period: 72h
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+  # Ruler reads rule files the sidecar writes from ConfigMaps labelled loki_rule (rules/loki-rules.yaml).
+  rulerConfig:
+    storage:
+      type: local
+      local: {directory: /rules}
+    alertmanager_url: http://kps-alertmanager.observability.svc:9093
+    enable_alertmanager_v2: true
+    enable_api: true
+
+sidecar:
+  rules:
+    # Tenant directory "fake" is what Loki uses when auth_enabled is false.
+    folder: /rules/fake
+    searchNamespace: observability
+  resources:
+    requests: {cpu: 10m, memory: 64Mi}
+    limits: {memory: 160Mi}

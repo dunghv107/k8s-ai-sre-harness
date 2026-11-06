@@ -1,0 +1,38 @@
+# Docker Desktop WSL2 kernel supports modern eBPF; no silent fallback if it fails (see docs/siem.md).
+driver:
+  kind: modern_ebpf
+  modernEbpf:
+    # Capabilities (BPF, PERFMON, SYS_RESOURCE, SYS_PTRACE) instead of a privileged container.
+    leastPrivileged: true
+
+collectors:
+  # shortcut: skips k8s-metacollector (one pod fewer), so events lack pod labels; enable when you need them.
+  kubernetes:
+    enabled: false
+
+falcoctl:
+  artifact:
+    # Rules are fetched once at start; the follower sidecar would only cost RAM.
+    follow:
+      enabled: false
+
+resources:
+  requests: {cpu: 50m, memory: 192Mi}
+  limits: {memory: 512Mi}
+
+falcosidekick:
+  enabled: true
+  # shortcut: one replica, the chart default is two.
+  replicaCount: 1
+  resources:
+    requests: {cpu: 10m, memory: 32Mi}
+    limits: {memory: 64Mi}
+  config:
+    loki:
+      # Plain HTTP: in-cluster Service.
+      hostport: http://loki.observability.svc:3100
+      # Notice and above stay queryable in Loki; only the ruler decides what pages.
+      minimumpriority: notice
+    # Alertmanager output is off on purpose: the Loki ruler tiers Falco events (platform/observability/rules/loki-rules.yaml).
+    alertmanager:
+      hostport: ""

@@ -1,0 +1,9 @@
+image:
+  repository: homelab/catalog-api
+port: 8080
+replicas: 2
+envFromSecret: postgres-app
+env: []
+resources:
+  requests: {cpu: 25m, memory: 64Mi}
+  limits: {cpu: 300m, memory: 160Mi}

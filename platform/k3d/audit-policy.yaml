@@ -1,6 +1,7 @@
 apiVersion: audit.k8s.io/v1
 kind: Policy
 omitStages: [RequestReceived]
+# The first matching rule wins, so the order below matters.
 rules:
   - level: Metadata
     resources:
@@ -14,5 +15,35 @@ rules:
     verbs: [create, update, patch, delete]
     resources:
       - group: rbac.authorization.k8s.io
-  # Everything else is noise for the alert rules and would only grow the log.
+  # Probes and discovery are anonymous by design; logging them would bury real anonymous access.
   - level: None
+    nonResourceURLs: ["/healthz*", "/livez*", "/readyz*", "/version", "/openapi*", "/api", "/api/*", "/apis", "/apis/*"]
+    users: ["system:anonymous"]
+  # Built-in control-plane identities are noise for the alert rules and would only grow the log.
+  - level: None
+    users: [system:kube-controller-manager, system:kube-scheduler, system:apiserver, system:kube-proxy, system:k3s-supervisor]
+  - level: None
+    userGroups: [system:nodes, "system:serviceaccounts:kube-system"]
+  - level: None
+    resources:
+      - group: ""
+        resources: [events, endpoints]
+      - group: coordination.k8s.io
+        resources: [leases]
+      - group: discovery.k8s.io
+        resources: [endpointslices]
+  # Request level keeps the body so the host-access rule (100212) can see hostPath/privileged; shop only to stay cheap.
+  - level: Request
+    omitManagedFields: true
+    namespaces: [shop]
+    verbs: [create, update, patch]
+    resources:
+      - group: ""
+        resources: [pods]
+      - group: apps
+        resources: [deployments, statefulsets, daemonsets, replicasets]
+      - group: batch
+        resources: [jobs, cronjobs]
+  # Catch-all at Metadata so 403s, anonymous access, NetworkPolicy and workload writes are visible to the rules.
+  - level: Metadata
+    omitManagedFields: true

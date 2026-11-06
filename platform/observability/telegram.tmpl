@@ -1,0 +1,46 @@
+{{/* One Telegram HTML message per alert group. Values are truncated, then <>&"' are swapped for a dot: html escaping would expand them 4-6x and break the 4096 limit. */}}
+{{ define "tg.alert" }}
+{{- $sec := or (eq .Labels.service "falco") (eq .Labels.source "loki-audit") (eq .Labels.source "security") }}
+{{- $src := .Labels.source }}{{ if eq .Labels.service "falco" }}{{ $src = "falco" }}{{ end }}
+{{- if eq .Status "firing" -}}
+🚨 {{ if $sec }}🛡️{{ else if eq .Labels.severity "critical" }}🔴{{ else if or (eq .Labels.severity "warning") (eq .Labels.severity "high") }}🟠{{ else }}🟡{{ end }} <b>{{ .Labels.severity | toUpper | reReplaceAll `[<>&"']` "·" }}</b> · {{ $src | reReplaceAll `[<>&"']` "·" }}
+{{- else -}}
+✅ <b>ĐÃ HẾT</b> · {{ $src | reReplaceAll `[<>&"']` "·" }}
+{{- end }}
+🎯 <b>{{ if .Annotations.summary }}{{ printf "%.200s" .Annotations.summary | reReplaceAll `[<>&"']` "·" }}{{ else }}{{ printf "%.200s" .Labels.alertname | reReplaceAll `[<>&"']` "·" }}{{ end }}</b>
+{{- $ns := or .Labels.namespace .Labels.k8s_ns_name }}
+{{- $svc := or (and (eq .Labels.service "falco") .Labels.k8s_pod_name) .Labels.service }}
+{{- if or $ns $svc }}
+📍 {{ if $ns }}{{ printf "%.40s" $ns | reReplaceAll `[<>&"']` "·" }}/{{ end }}{{ printf "%.40s" $svc | reReplaceAll `[<>&"']` "·" }}{{ if .Labels.http_route }} · {{ printf "%.60s" .Labels.http_route | reReplaceAll `[<>&"']` "·" }}{{ end }}
+{{- end }}
+{{- $user := or .Labels.user .Labels.user_name }}
+{{- if or $user .Labels.verb }}
+👤 {{ printf "%.60s" $user | reReplaceAll `[<>&"']` "·" }}{{ if .Labels.verb }} · {{ printf "%.20s" .Labels.verb | reReplaceAll `[<>&"']` "·" }} {{ printf "%.40s" .Labels.resource | reReplaceAll `[<>&"']` "·" }}{{ end }}
+{{- end }}
+{{- if .Labels.source_ip }}
+🌐 {{ printf "%.45s" .Labels.source_ip | reReplaceAll `[<>&"']` "·" }}
+{{- end }}
+{{- if and .Labels.proc_cmdline (ne .Labels.proc_cmdline "<NA>") }}
+⚙️ <code>{{ printf "%.60s" .Labels.proc_cmdline | reReplaceAll `[<>&"']` "·" }}</code>
+{{- end }}
+{{- if eq .Labels.protected "true" }}
+🔒 Bảo mật — không tự đóng
+{{- end }}
+🕒 {{ (tz "Asia/Ho_Chi_Minh" .StartsAt).Format "02/01 15:04:05" }}
+{{- $desc := or .Annotations.description .Annotations.info }}
+{{- if $desc }}
+📝 {{ $desc | reReplaceAll "\\s+" " " | printf "%.160s" | reReplaceAll `[<>&"']` "·" }}
+{{- end }}
+{{- if and .GeneratorURL (lt (len .GeneratorURL) 100) }}
+🔗 <a href="{{ printf "%.100s" .GeneratorURL | reReplaceAll `[<>&"']` "·" }}">Xem trong Grafana/Prometheus</a>
+{{- end }}
+{{ end }}
+
+{{ define "telegram.homelab" -}}
+{{- $shown := .Alerts -}}
+{{- if gt (len .Alerts) 5 }}{{ $shown = slice .Alerts 0 5 }}{{ end -}}
+{{- range $shown }}{{ template "tg.alert" . }}
+{{ end -}}
+{{- if gt (len .Alerts) 5 }}+{{ len (slice .Alerts 5) }} cảnh báo nữa
+{{ end -}}
+{{- end }}

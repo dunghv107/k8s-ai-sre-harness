@@ -1,0 +1,36 @@
+image:
+  repository: ""
+  tag: "0.1.0"
+  # images are imported into k3d, there is no registry to pull from
+  pullPolicy: IfNotPresent
+
+port: 8080
+replicas: 1
+
+# plain list of {name, value}
+env: []
+# Secret whose keys are all injected as env vars (e.g. postgres-app -> DATABASE_URL)
+envFromSecret: ""
+
+otel:
+  endpoint: http://alloy.observability.svc:4318
+  sampler: parentbased_always_on
+  resourceAttributes: deployment.environment=production,service.namespace=shop
+
+resources:
+  requests: {cpu: 25m, memory: 64Mi}
+  limits: {cpu: 250m, memory: 128Mi}
+
+probes:
+  path: /healthz
+
+# Override per app when the image user differs (Next/Node images often use 1000)
+podSecurityContext:
+  runAsUser: 10001
+
+serviceAccount:
+  create: true
+
+pdb:
+  enabled: false
+  minAvailable: 1

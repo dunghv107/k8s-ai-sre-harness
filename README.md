@@ -64,8 +64,21 @@ flowchart LR
 > No company data, hostnames or credentials are included. The AI triage agent is the new part, built on top of
 > the alert pipeline that ran in production.
 
-> **Status:** specification phase (Spec-Driven Development with GitHub Spec Kit). Implementation follows
-> `/speckit-plan` → `/speckit-tasks` → `/speckit-implement`.
+> **Status:** the homelab and the full alert pipeline run today: four-language sample app with 100 % tracing,
+> metrics/logs/traces, a simple SIEM (API audit log + Falco) and Telegram alerts. The AI triage agent is specified
+> ([spec 001](specs/001-realtime-alert-triage/spec.md)) and comes next.
+
+### Run the demo
+
+```bash
+bash scripts/up.sh          # k3d cluster (1 server + 2 agents), audit log, Cilium + Hubble
+cp .env.example .env        # fill TELEGRAM_BOT_TOKEN and TELEGRAM_ALERT_CHAT_ID
+bash scripts/platform.sh    # Prometheus, Alertmanager → Telegram, Grafana, Loki, Tempo, Alloy, Falco, SIEM rules
+bash scripts/deploy-apps.sh # Postgres + shop-web (Next.js), orders-api (Node), catalog-api (Python), invoice-api (Go)
+kubectl -n shop port-forward svc/shop-web 3000:3000   # open http://localhost:3000, press "product 4" for a real 500
+```
+
+Detection rules and how to trigger each one: [docs/siem.md](docs/siem.md). Service contract: [docs/contract.md](docs/contract.md).
 
 ### Why
 
@@ -118,8 +131,8 @@ docs/
 .env.example           every setting the stack reads; copy to .env (never committed)
 ```
 
-Created by the implementation phase: `platform/` (k3d config, Argo CD apps, Helm values), `apps/` (sample apps),
-`agent/` (alert-agent source), `.github/workflows/` (CI).
+Also: `platform/` (k3d, Cilium, observability, Falco), `apps/` (four sample services), `deploy/` (shared Helm chart,
+Postgres, NetworkPolicies), `scripts/` (up, platform, deploy-apps). Still to come: `agent/`, `.github/workflows/`.
 
 ### Requirements
 
@@ -147,8 +160,21 @@ uv tool install specify-cli --from "git+https://github.com/github/spec-kit.git@v
 > dữ liệu, tên máy chủ hay thông tin đăng nhập của công ty. Agent AI phân loại cảnh báo là phần mới, xây trên luồng
 > cảnh báo đã chạy production.
 
-> **Trạng thái:** giai đoạn đặc tả (Spec-Driven Development với GitHub Spec Kit). Triển khai đi theo
-> `/speckit-plan` → `/speckit-tasks` → `/speckit-implement`.
+> **Trạng thái:** homelab và toàn bộ luồng cảnh báo đã chạy: app mẫu bốn ngôn ngữ với trace 100 %, số liệu/log/trace,
+> SIEM đơn giản (audit log API + Falco) và cảnh báo về Telegram. Agent AI phân loại cảnh báo đã có đặc tả
+> ([spec 001](specs/001-realtime-alert-triage/spec.md)) và là bước tiếp theo.
+
+### Chạy demo
+
+```bash
+bash scripts/up.sh          # cụm k3d (1 server + 2 agent), audit log, Cilium + Hubble
+cp .env.example .env        # điền TELEGRAM_BOT_TOKEN và TELEGRAM_ALERT_CHAT_ID
+bash scripts/platform.sh    # Prometheus, Alertmanager → Telegram, Grafana, Loki, Tempo, Alloy, Falco, luật SIEM
+bash scripts/deploy-apps.sh # Postgres + shop-web (Next.js), orders-api (Node), catalog-api (Python), invoice-api (Go)
+kubectl -n shop port-forward svc/shop-web 3000:3000   # mở http://localhost:3000, bấm "product 4" để có lỗi 500 thật
+```
+
+Luật phát hiện và cách kích hoạt từng luật: [docs/siem.md](docs/siem.md). Chuẩn giao tiếp giữa các dịch vụ: [docs/contract.md](docs/contract.md).
 
 ### Vì sao
 
@@ -201,8 +227,8 @@ docs/
 .env.example           mọi biến cấu hình; chép sang .env (không bao giờ commit)
 ```
 
-Giai đoạn triển khai sẽ tạo thêm: `platform/` (cấu hình k3d, app Argo CD, Helm values), `apps/` (app mẫu),
-`agent/` (mã nguồn alert-agent), `.github/workflows/` (CI).
+Ngoài ra: `platform/` (k3d, Cilium, giám sát, Falco), `apps/` (bốn dịch vụ mẫu), `deploy/` (Helm chart dùng chung,
+Postgres, NetworkPolicy), `scripts/` (up, platform, deploy-apps). Sắp làm: `agent/`, `.github/workflows/`.
 
 ### Yêu cầu
 

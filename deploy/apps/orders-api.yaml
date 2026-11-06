@@ -1,0 +1,11 @@
+image:
+  repository: homelab/orders-api
+port: 8080
+replicas: 2
+envFromSecret: postgres-app
+env:
+  - {name: CATALOG_URL, value: "http://catalog-api:8080"}
+  - {name: INVOICE_URL, value: "http://invoice-api:8080"}
+resources:
+  requests: {cpu: 25m, memory: 64Mi}
+  limits: {cpu: 300m, memory: 160Mi}

@@ -1,0 +1,63 @@
+controller:
+  type: daemonset
+  # k3s labels the server node; only it holds audit.log.
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: "true"
+  volumes:
+    extra:
+      - {name: alloy-data, emptyDir: {}}
+      # hostPath because the audit log is a file on the server node, written by kube-apiserver; mounted read-only.
+      - {name: audit-log, hostPath: {path: /var/log/kubernetes, type: Directory}}
+
+alloy:
+  mounts:
+    extra:
+      - {name: alloy-data, mountPath: /tmp/alloy}
+      - {name: audit-log, mountPath: /var/log/kubernetes, readOnly: true}
+  # Root is needed only because kube-apiserver writes audit.log as root with mode 0600; everything else is locked down.
+  securityContext:
+    runAsNonRoot: false
+    runAsUser: 0
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities: {drop: [ALL]}
+    seccompProfile: {type: RuntimeDefault}
+  resources:
+    requests: {cpu: 20m, memory: 64Mi}
+    limits: {memory: 128Mi}
+  configMap:
+    content: |
+      local.file_match "audit" {
+        path_targets = [{ "__path__" = "/var/log/kubernetes/audit.log", "job" = "k8s-audit" }]
+      }
+
+      // shortcut: starts at the end of the file after a restart, so events during downtime are missed.
+      loki.source.file "audit" {
+        targets       = local.file_match.audit.targets
+        tail_from_end = true
+        forward_to    = [loki.process.audit.receiver]
+      }
+
+      // Use the event time, not the ingest time, so a replay cannot re-fire old alerts.
+      loki.process "audit" {
+        forward_to = [loki.write.default.receiver]
+        stage.json {
+          expressions = { ts = "stageTimestamp" }
+        }
+        stage.timestamp {
+          source = "ts"
+          format = "RFC3339Nano"
+        }
+      }
+
+      loki.write "default" {
+        endpoint { url = "http://loki.observability.svc:3100/loki/api/v1/push" }
+      }
+
+# No OTLP here; the main release owns the alloy Service.
+service:
+  enabled: false
+configReloader:
+  resources:
+    requests: {cpu: 5m, memory: 16Mi}
+    limits: {memory: 32Mi}

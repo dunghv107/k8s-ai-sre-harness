@@ -1,0 +1,169 @@
+# Release name and fullnameOverride are both "kps": services are kps-prometheus, kps-alertmanager, kps-grafana.
+fullnameOverride: kps
+
+# Our own rules live in rules/; the stock set is too noisy for a demo and would flood Telegram.
+defaultRules:
+  create: false
+
+# k3s embeds these control-plane parts, so their scrapes would fail on every target.
+kubeEtcd:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+prometheus:
+  prometheusSpec:
+    # Alloy pushes span metrics here.
+    enableRemoteWriteReceiver: true
+    retention: 2d
+    retentionSize: 3GB
+    # Pick up PrometheusRule/ServiceMonitor from every namespace, not only Helm-labelled ones.
+    ruleSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    # shortcut: no PVC, metrics vanish with the pod; add a PVC when history must survive restarts.
+    resources:
+      requests: {cpu: 100m, memory: 400Mi}
+      limits: {memory: 800Mi}
+    # Cilium chart ServiceMonitors are off in platform/cilium/values.yaml, so scrape the agent pods directly.
+    additionalScrapeConfigs:
+      - job_name: cilium-agent
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces: {names: [kube-system]}
+        relabel_configs:
+          - {source_labels: [__meta_kubernetes_pod_label_k8s_app], regex: cilium, action: keep}
+          - {source_labels: [__meta_kubernetes_pod_ip], regex: (.+), target_label: __address__, replacement: "$1:9962"}
+          - {source_labels: [__meta_kubernetes_pod_node_name], target_label: node}
+      - job_name: hubble
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces: {names: [kube-system]}
+        relabel_configs:
+          - {source_labels: [__meta_kubernetes_pod_label_k8s_app], regex: cilium, action: keep}
+          - {source_labels: [__meta_kubernetes_pod_ip], regex: (.+), target_label: __address__, replacement: "$1:9965"}
+          - {source_labels: [__meta_kubernetes_pod_node_name], target_label: node}
+
+prometheusOperator:
+  resources:
+    requests: {cpu: 20m, memory: 64Mi}
+    limits: {memory: 128Mi}
+
+kube-state-metrics:
+  resources:
+    requests: {cpu: 10m, memory: 32Mi}
+    limits: {memory: 64Mi}
+
+prometheus-node-exporter:
+  resources:
+    requests: {cpu: 10m, memory: 16Mi}
+    limits: {memory: 32Mi}
+
+alertmanager:
+  alertmanagerSpec:
+    # Mounted at /etc/alertmanager/secrets/alertmanager-telegram/bot_token; created by scripts/platform.sh.
+    secrets: [alertmanager-telegram]
+    resources:
+      requests: {cpu: 10m, memory: 32Mi}
+      limits: {memory: 64Mi}
+  # templateFiles.telegram.tmpl comes from platform/observability/telegram.tmpl via --set-file in scripts/platform.sh.
+  config:
+    templates:
+      - /etc/alertmanager/config/*.tmpl
+    route:
+      receiver: telegram
+      # rule_ref and the Falco rule keep unrelated audit/Falco detections out of one giant message.
+      group_by: [alertname, rule_ref, rule, namespace, k8s_ns_name, service]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      routes:
+        # Silent markers never post anywhere.
+        - receiver: "null"
+          matchers: ['severity="none"']
+        # Both routes use continue so each receiver gets every alert and a dead webhook cannot block Telegram.
+        - receiver: telegram
+          matchers: ['alertname=~".+"']
+          continue: true
+        - receiver: alert-agent
+          matchers: ['alertname=~".+"']
+    # Rollouts and pod startup produce short-lived 5xx, restarts and missing replicas; the marker alert mutes them.
+    inhibit_rules:
+      - source_matchers: ['alertname="ServiceRollingOut"']
+        target_matchers: ['alertname=~"Http5xxRate|PodRestartingFrequently|DeploymentReplicasMissing|AppErrorLogs"']
+        equal: [namespace, service]
+    receivers:
+      - name: "null"
+      - name: telegram
+        telegram_configs:
+          - send_resolved: true
+            bot_token_file: /etc/alertmanager/secrets/alertmanager-telegram/bot_token
+            # Placeholder: scripts/platform.sh replaces the 0 below from .env (TELEGRAM_ALERT_CHAT_ID).
+            chat_id: 0
+            # Alertmanager has no disable_web_page_preview option; the footer URL is in-cluster, so Telegram cannot preview it anyway.
+            parse_mode: HTML
+            message: '{{ template "telegram.homelab" . }}'
+      - name: alert-agent
+        webhook_configs:
+          # Plain HTTP is fine: in-cluster only. The agent is deployed later, failures here are retried and ignored.
+          - url: http://alert-agent.alerting.svc:8080/alertmanager
+            send_resolved: true
+
+grafana:
+  # Secret created by scripts/platform.sh with keys admin-user and admin-password.
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  defaultDashboardsEditable: false
+  resources:
+    requests: {cpu: 50m, memory: 150Mi}
+    limits: {memory: 300Mi}
+  sidecar:
+    resources:
+      requests: {cpu: 10m, memory: 64Mi}
+      limits: {memory: 160Mi}
+  additionalDataSources:
+    - name: Loki
+      uid: loki
+      type: loki
+      access: proxy
+      url: http://loki.observability.svc:3100
+      jsonData:
+        derivedFields:
+          # trace_id is structured metadata, so the field matches by label name, not by regex on the line.
+          - name: TraceID
+            matcherType: label
+            matcherRegex: trace_id
+            url: "$${__value.raw}"
+            datasourceUid: tempo
+            urlDisplayLabel: View trace
+    - name: Tempo
+      uid: tempo
+      type: tempo
+      access: proxy
+      url: http://tempo.observability.svc:3200
+      jsonData:
+        tracesToLogsV2:
+          datasourceUid: loki
+          spanStartTimeShift: -5m
+          spanEndTimeShift: 5m
+          filterByTraceID: false
+          filterBySpanID: false
+          customQuery: true
+          query: '{namespace=~".+"} | trace_id="$${__trace.traceId}"'
+        tracesToMetrics:
+          datasourceUid: prometheus
+          queries:
+            - name: Calls
+              query: 'sum(rate(traces_span_metrics_calls_total{$$__tags}[5m]))'
+          tags:
+            - {key: service.name, value: service_name}
+        serviceMap:
+          datasourceUid: prometheus
+        nodeGraph:
+          enabled: true

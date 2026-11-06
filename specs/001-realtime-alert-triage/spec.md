@@ -64,6 +64,29 @@ lúc, 2 cái khác hẳn); kiểm số sự cố mở ra, số sub-agent chạy,
 
 ---
 
+### User Story 2b - Lỗi tự hết thì không gọi agent (Priority: P1)
+
+Nhiều cảnh báo là chuyển tiếp: Pod mới đang khởi động nên trả 5xx vài giây, rollout đang thay Pod, một lần restart
+rồi ổn định. Harness phải phân biệt lỗi thật với lỗi sẽ tự hết bằng kiểm tra rẻ, không dùng mô hình, và chỉ gọi
+sub-agent cho lỗi thật.
+
+**Why this priority**: Gọi mô hình cho lỗi tự hết vừa tốn tiền vừa thêm tin nhiễu, đúng thứ hệ thống này muốn bỏ.
+
+**Independent Test**: Rollout một bản mới làm Pod trả 5xx trong 30 giây đầu; kiểm không có sub-agent nào chạy và
+sự cố được đóng "tự hết". Sau đó gây 5xx kéo dài 5 phút sau khi rollout xong; kiểm sub-agent chạy đúng một lần.
+
+**Acceptance Scenarios**:
+
+1. **Given** Deployment đang rollout hoặc Pod lỗi có tuổi dưới cửa sổ khởi động, **When** cảnh báo 5xx, restart hay
+   thiếu replica của đúng dịch vụ đó tới, **Then** không gửi tin và không gọi agent; hệ thống đợi rollout xong
+   cộng thời gian ân hạn rồi kiểm lại.
+2. **Given** cảnh báo hết (resolved) trong thời gian ân hạn, **When** hết hạn, **Then** sự cố đóng "tự hết", ghi
+   lý do, không gọi agent, chỉ xuất hiện ở bảng 08:30 dưới mục "tự hết".
+3. **Given** lỗi vẫn còn sau ân hạn và sau khi rollout xong, **When** kiểm lại, **Then** gọi sub-agent như bình thường.
+4. **Given** cảnh báo thuộc loại bảo vệ (bảo mật, audit, runtime), **When** tới, **Then** bỏ qua cửa lọc, xử lý ngay.
+
+---
+
 ### User Story 3 - Tin soạn sẵn cho dev, rồi gửi thẳng (Priority: P2)
 
 Với sự cố nhãn "nghiệp vụ", agent soạn một tin cho dev dự án: app, môi trường, thời gian, số lần, lỗi đại
@@ -207,6 +230,26 @@ sự cố nào chưa phân tích được và vì sao.
   phí, lỗi nguồn dữ liệu, sự cố chưa phân tích.
 - **FR-024**: Hệ thống MUST cấu hình được ánh xạ namespace/app → dự án → kênh dev.
 - **FR-025**: Hệ thống MUST NOT mở cổng nhận kết nối từ Internet; mọi kết nối tới Telegram đi theo chiều ra.
+- **FR-026**: Dấu vân tay tính theo nguồn, kế thừa logic gộp đã chạy production:
+  audit log = rule + cụm + `namespace/đối tượng` + người thực hiện (không tính node nhận request);
+  runtime security = rule + cụm + `namespace/pod` + node; cảnh báo số liệu/trace = rule + toàn bộ label.
+- **FR-027**: Vòng đời một sự cố: còn mở thì lặp lại chỉ tăng số lần, thời điểm cuối và thời lượng, không gửi tin;
+  chỉ gửi tin ngắn "lặp lại #ID" khi số lần chạm 10 / 100 / 1000 hoặc khi lỗi quay lại sau ≥ 60 phút im lặng.
+  Sự cố đã đóng mà lặp lại thì mở ID mới. Thông báo "đã hết" của rule hạ tầng tự đóng sự cố chưa ai nhận.
+- **FR-028**: Nhắc lại sự cố chưa ai xử lý ở các mốc 5, 10, 30, 60 phút rồi mỗi 60 phút, dừng sau 24 giờ; mỗi lượt
+  chỉ một tin gom mọi sự cố đến hạn. Ngoài giờ làm việc, tin nhắc kèm chẩn đoán của agent thay vì chỉ nhắc số lần.
+- **FR-029**: Trước khi gọi sub-agent, hệ thống MUST chạy cửa lọc xác định (không dùng mô hình) cho cảnh báo không
+  thuộc loại bảo vệ: (a) Deployment/StatefulSet của dịch vụ đang rollout (thế hệ chưa khớp, replica mới chưa đủ),
+  (b) mọi Pod lỗi có tuổi dưới cửa sổ khởi động, (c) cảnh báo đã hết trước khi tới lượt phân tích, (d) số lỗi dưới
+  ngưỡng tối thiểu trong cửa sổ. Trúng (a) hoặc (b) thì hoãn tới khi rollout xong cộng thời gian ân hạn rồi kiểm lại;
+  trúng (c) thì đóng "tự hết"; trúng (d) thì chỉ ghi nhận, không gọi agent.
+- **FR-030**: Cảnh báo bảo vệ (bảo mật, audit, runtime security, mất node, lưu trữ, chứng chỉ) MUST NOT đi qua cửa lọc.
+- **FR-031**: Mỗi quyết định của cửa lọc MUST ghi lý do (vd "rollout orders-api rev 7 đang chạy", "Pod 40 giây tuổi")
+  và hiện ở bảng 08:30 trong mục "tự hết / đã hoãn"; tỉ lệ này có trong nhật ký hoạt động.
+- **FR-032**: Tầng cảnh báo MUST chặn sẵn (inhibit) cảnh báo 5xx, restart, thiếu replica của một dịch vụ khi chính dịch
+  vụ đó đang rollout, để Telegram không nhận tin chuyển tiếp ngay cả khi harness chưa chạy.
+- **FR-033**: Mẫu từng tự hết nhiều lần (cùng dấu vân tay, ≥3 lần trong 7 ngày) MUST được kéo dài thời gian ân hạn tự động
+  và được ghi là "hay tự hết" trong bảng, để người vận hành quyết định sửa gốc hay đánh dấu nhiễu tin cậy.
 
 ### Key Entities
 
@@ -238,6 +281,8 @@ sự cố nào chưa phân tích được và vì sao.
 - **SC-009**: Điều kiện đề xuất bật gửi thẳng cho một dự án: ít nhất 4 tuần, tối thiểu 20 tin, ≥ 90% tin gửi
   nguyên văn hoặc chỉ sửa câu chữ, không có tin nào chẩn đoán sai hướng.
 - **SC-010**: 0 cảnh báo bị mất khi hệ thống khởi động lại giữa một bão cảnh báo.
+- **SC-011**: Với 20 lần rollout có 5xx chuyển tiếp trong bộ kiểm thử, 0 lần gọi sub-agent và 0 tin Telegram; với 5xx
+  kéo dài sau rollout, 100% được phân tích trong thời hạn SC-001 cộng thời gian ân hạn.
 
 ## Assumptions
 
@@ -248,7 +293,8 @@ sự cố nào chưa phân tích được và vì sao.
 - Kênh tin nhắn là Telegram: một nhóm cảnh báo cho người vận hành; ở giai đoạn 2 mỗi dự án có kênh dev riêng.
 - Một người vận hành duy nhất có quyền gõ lệnh; danh sách người được phép mở rộng được.
 - Mặc định: tối đa 5 sub-agent đồng thời, cửa sổ gom 60 giây, trần chi phí 2 USD/ngày, mỗi sub-agent tối đa
-  5 phút; đều chỉnh được.
+  5 phút; cửa sổ khởi động Pod 3 phút, thời gian ân hạn sau rollout 2 phút, ngưỡng tối thiểu 3 lỗi trong 2 phút;
+  đều chỉnh được.
 - Mô hình chạy qua OpenAI API (khoá API của người vận hành, nạp qua kho bí mật), chỉ nhận đoạn log đã che.
 - Danh sách loại bảo vệ mặc định: runtime security, audit log, mất node, lưu trữ, chứng chỉ; chỉnh được.
 - Phiên bản này không tự sửa hay restart bất cứ gì; mọi khắc phục do người.

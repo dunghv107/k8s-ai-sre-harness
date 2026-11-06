@@ -1,0 +1,446 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-rules
+  namespace: observability
+  labels:
+    # The Loki rules sidecar loads every ConfigMap with this label.
+    loki_rule: "1"
+    app.kubernetes.io/part-of: homelab-siem
+data:
+  homelab.yaml: |
+    # Tiering: only rules below carry an alert; low-signal events (admin debug, Falco Notice) stay queryable in Loki.
+    # rule_ref is the production rule number for traceability; mitre is the ATT&CK technique id.
+    # The audit pipeline sets user to the impersonated identity when present, so `kubectl --as=` is judged as that identity.
+    groups:
+      - name: audit
+        rules:
+          - alert: AuditExecByServiceAccount
+            expr: |
+              sum by (user, verb, resource, subresource, namespace, name, source_ip) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json user="user.username", iuser="impersonatedUser.username", verb="verb", resource="objectRef.resource", subresource="objectRef.subresource", namespace="objectRef.namespace", name="objectRef.name", source_ip="sourceIPs[0]"
+                    | label_format user=`{{ if .iuser }}{{ .iuser }}{{ else }}{{ .user }}{{ end }}`
+                    | subresource=~"exec|attach|portforward"
+                    | user=~"system:serviceaccount:.*"
+                  [2m]
+                )
+              ) > 0
+            labels:
+              severity: high
+              source: loki-audit
+              service: k8s-audit
+              protected: "true"
+              rule_ref: "100211"
+              mitre: T1609
+            annotations:
+              summary: "ServiceAccount {{ $labels.user }} used {{ $labels.subresource }} on pod {{ $labels.namespace }}/{{ $labels.name }}"
+          - alert: AuditExecByUser
+            expr: |
+              sum by (user, verb, resource, subresource, namespace, name, source_ip) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json user="user.username", iuser="impersonatedUser.username", verb="verb", resource="objectRef.resource", subresource="objectRef.subresource", namespace="objectRef.namespace", name="objectRef.name", source_ip="sourceIPs[0]"
+                    | label_format user=`{{ if .iuser }}{{ .iuser }}{{ else }}{{ .user }}{{ end }}`
+                    | subresource=~"exec|attach|portforward"
+                    | user!~"system:serviceaccount:.*"
+                  [2m]
+                )
+              ) > 0
+            labels:
+              severity: warning
+              source: loki-audit
+              service: k8s-audit
+              protected: "true"
+              rule_ref: "100201"
+              mitre: T1609
+            annotations:
+              summary: "{{ $labels.user }} used {{ $labels.subresource }} on pod {{ $labels.namespace }}/{{ $labels.name }}"
+          - alert: AuditRBACChange
+            # Controllers that legitimately rewrite RBAC; the garbage collector only patches or deletes (production 100225).
+            expr: |
+              sum by (user, verb, resource, namespace, name, source_ip) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json user="user.username", iuser="impersonatedUser.username", verb="verb", resource="objectRef.resource", apigroup="objectRef.apiGroup", namespace="objectRef.namespace", name="objectRef.name", source_ip="sourceIPs[0]"
+                    | label_format user=`{{ if .iuser }}{{ .iuser }}{{ else }}{{ .user }}{{ end }}`
+                    | apigroup="rbac.authorization.k8s.io"
+                    | verb=~"create|update|patch|delete|deletecollection"
+                    | user!="system:admin"
+                    | user!~"system:kube-controller-manager|system:apiserver|system:k3s-.*|system:node:.*|system:serviceaccount:kube-system:clusterrole-aggregation-controller"
+                    | (user!="system:serviceaccount:kube-system:generic-garbage-collector" or verb=~"create|update|deletecollection")
+                  [2m]
+                )
+              ) > 0
+            labels:
+              severity: high
+              source: loki-audit
+              service: k8s-audit
+              protected: "true"
+              rule_ref: "100202"
+              mitre: T1098
+            annotations:
+              summary: "{{ $labels.user }} {{ $labels.verb }} {{ $labels.resource }}/{{ $labels.name }} (permission change)"
+          - alert: AuditRBACChangeByAdmin
+            # The admin deploys through helm, which patches RBAC; still worth a protected heads-up, but not high.
+            expr: |
+              sum by (user, verb, resource, namespace, name, source_ip) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json user="user.username", iuser="impersonatedUser.username", verb="verb", resource="objectRef.resource", apigroup="objectRef.apiGroup", namespace="objectRef.namespace", name="objectRef.name", source_ip="sourceIPs[0]"
+                    | label_format user=`{{ if .iuser }}{{ .iuser }}{{ else }}{{ .user }}{{ end }}`
+                    | apigroup="rbac.authorization.k8s.io"
+                    | verb=~"create|update|patch|delete|deletecollection"
+                    | user="system:admin"
+                  [2m]
+                )
+              ) > 0
+            labels:
+              severity: warning
+              source: loki-audit
+              service: k8s-audit
+              protected: "true"
+              rule_ref: "100202"
+              mitre: T1098
+            annotations:
+              summary: "{{ $labels.user }} {{ $labels.verb }} {{ $labels.resource }}/{{ $labels.name }} (permission change)"
+          - alert: AuditNetworkPolicyChange
+            # Admin changes go through scripts/deploy-apps.sh, so only other identities alert.
+            expr: |
+              sum by (user, verb, resource, namespace, name, source_ip) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json user="user.username", iuser="impersonatedUser.username", verb="verb", resource="objectRef.resource", namespace="objectRef.namespace", name="objectRef.name", source_ip="sourceIPs[0]"
+                    | label_format user=`{{ if .iuser }}{{ .iuser }}{{ else }}{{ .user }}{{ end }}`
+                    | resource=~"networkpolicies|ciliumnetworkpolicies|ciliumclusterwidenetworkpolicies"
+                    | verb=~"create|update|patch|delete|deletecollection"
+                    | user!="system:admin"
+                    | user!~"system:kube-controller-manager|system:apiserver|system:k3s-.*|system:node:.*|system:serviceaccount:kube-system:.*"
+                  [2m]
+                )
+              ) > 0
+            labels:
+              severity: warning
+              source: loki-audit
+              service: k8s-audit
+              protected: "true"
+              rule_ref: "100203"
+              mitre: T1562.004
+            annotations:
+              summary: "{{ $labels.user }} {{ $labels.verb }} {{ $labels.resource }} {{ $labels.namespace }}/{{ $labels.name }} (network policy change)"
+          - alert: AuditSecretsListByServiceAccount
+            # Known controllers are the ones seen listing or watching Secrets in the real audit log of this cluster.
+            expr: |
+              sum by (user, verb, resource, namespace, source_ip) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json user="user.username", iuser="impersonatedUser.username", verb="verb", resource="objectRef.resource", namespace="objectRef.namespace", code="responseStatus.code", source_ip="sourceIPs[0]"
+                    | label_format user=`{{ if .iuser }}{{ .iuser }}{{ else }}{{ .user }}{{ end }}`
+                    | resource="secrets"
+                    | verb=~"list|watch"
+                    | code=~"2.."
+                    | user=~"system:serviceaccount:.*"
+                    | user!~"system:serviceaccount:(kube-system:.*|observability:(kps-.*|loki|alloy.*|tempo)|falco:(falco|falcosidekick))"
+                  [2m]
+                )
+              ) > 0
+            labels:
+              severity: critical
+              source: loki-audit
+              service: k8s-audit
+              protected: "true"
+              rule_ref: "100210"
+              mitre: T1528
+            annotations:
+              summary: "ServiceAccount {{ $labels.user }} {{ $labels.verb }} Secrets in namespace '{{ $labels.namespace }}': the token in a pod may be stolen"
+          - alert: AuditSecretsListByUser
+            # system:admin is admin debugging (production 100209): no alert, the events stay in Loki.
+            expr: |
+              sum by (user, verb, resource, namespace, source_ip) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json user="user.username", iuser="impersonatedUser.username", verb="verb", resource="objectRef.resource", namespace="objectRef.namespace", code="responseStatus.code", source_ip="sourceIPs[0]"
+                    | label_format user=`{{ if .iuser }}{{ .iuser }}{{ else }}{{ .user }}{{ end }}`
+                    | resource="secrets"
+                    | verb=~"list|watch"
+                    | code=~"2.."
+                    | user!~"system:serviceaccount:.*"
+                    | user!="system:admin"
+                    | user!~"system:kube-controller-manager|system:kube-scheduler|system:apiserver|system:k3s-.*|system:node:.*"
+                  [2m]
+                )
+              ) > 0
+            labels:
+              severity: high
+              source: loki-audit
+              service: k8s-audit
+              protected: "true"
+              rule_ref: "100204"
+              mitre: T1552.007
+            annotations:
+              summary: "{{ $labels.user }} {{ $labels.verb }} Secrets in namespace '{{ $labels.namespace }}' (not a known controller)"
+          - alert: AuditShopWriteOutsidePipeline
+            # The deploy pipeline is system:admin via scripts/deploy-apps.sh (info only); controllers never reach this log (audit policy).
+            expr: |
+              sum by (user, verb, resource, namespace, name, source_ip) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json user="user.username", iuser="impersonatedUser.username", verb="verb", resource="objectRef.resource", namespace="objectRef.namespace", name="objectRef.name", source_ip="sourceIPs[0]"
+                    | label_format user=`{{ if .iuser }}{{ .iuser }}{{ else }}{{ .user }}{{ end }}`
+                    | namespace="shop"
+                    | verb=~"create|update|patch|delete"
+                    | resource=~"deployments|statefulsets|daemonsets|replicasets|services|configmaps|secrets|persistentvolumeclaims|httproutes"
+                    | user!="system:admin"
+                    | user!~"system:kube-controller-manager|system:apiserver|system:k3s-.*|system:node:.*|system:serviceaccount:kube-system:.*"
+                  [2m]
+                )
+              ) > 0
+            labels:
+              severity: warning
+              source: loki-audit
+              service: k8s-audit
+              protected: "true"
+              rule_ref: "100205/100216"
+              mitre: T1610
+            annotations:
+              summary: "{{ $labels.user }} {{ $labels.verb }} {{ $labels.resource }} {{ $labels.namespace }}/{{ $labels.name }} outside the deploy pipeline"
+          - alert: AuditPermissionProbing
+            expr: |
+              sum by (user, source_ip) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json user="user.username", iuser="impersonatedUser.username", code="responseStatus.code", source_ip="sourceIPs[0]"
+                    | label_format user=`{{ if .iuser }}{{ .iuser }}{{ else }}{{ .user }}{{ end }}`
+                    | code="403"
+                  [2m]
+                )
+              ) >= 10
+            labels:
+              severity: high
+              source: loki-audit
+              service: k8s-audit
+              protected: "true"
+              rule_ref: "100206/100207"
+              mitre: T1613
+            annotations:
+              summary: "{{ $labels.user }} was denied (403) {{ $value | printf `%.0f` }} times in 2m: probing permissions"
+          - alert: AuditAnonymousAccepted
+            # Health and discovery paths are anonymous by design and excluded here and in the audit policy.
+            expr: |
+              sum by (user, verb, uri, source_ip) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json user="user.username", verb="verb", uri="requestURI", code="responseStatus.code", source_ip="sourceIPs[0]"
+                    | user="system:anonymous"
+                    | code=~"2.."
+                    | uri!~"/(livez|readyz|healthz|version|openapi|api|apis)(/.*|[?].*)?"
+                  [2m]
+                )
+              ) > 0
+            labels:
+              severity: critical
+              source: loki-audit
+              service: k8s-audit
+              protected: "true"
+              rule_ref: "100208"
+              mitre: T1078.001
+            annotations:
+              summary: "Anonymous request accepted: {{ $labels.verb }} {{ $labels.uri }}"
+          - alert: AuditHostAccessWorkload
+            # Needs the request body: the audit policy logs it at Request level for workloads in shop only. system:admin is excluded as in production.
+            expr: |
+              sum by (user, verb, resource, namespace, name, source_ip) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    |~ `"hostPath"|"privileged":true|"hostPID":true|"hostNetwork":true|"hostIPC":true|"SYS_ADMIN"`
+                    | json user="user.username", iuser="impersonatedUser.username", verb="verb", resource="objectRef.resource", namespace="objectRef.namespace", name="objectRef.name", source_ip="sourceIPs[0]"
+                    | label_format user=`{{ if .iuser }}{{ .iuser }}{{ else }}{{ .user }}{{ end }}`
+                    | verb=~"create|update|patch"
+                    | resource=~"pods|deployments|daemonsets|statefulsets|replicasets|jobs|cronjobs"
+                    | user!="system:admin"
+                    | user!~"system:kube-controller-manager|system:kube-scheduler|system:node:.*|system:serviceaccount:kube-system:.*"
+                  [2m]
+                )
+              ) > 0
+            labels:
+              severity: critical
+              source: loki-audit
+              service: k8s-audit
+              protected: "true"
+              rule_ref: "100212"
+              mitre: T1611
+            annotations:
+              summary: "{{ $labels.user }} {{ $labels.verb }} {{ $labels.resource }} {{ $labels.namespace }}/{{ $labels.name }} requesting host access"
+          - alert: AuditPodSecurityDenied
+            # Fallback for 100212 outside the logged request body: Pod Security admission rejected the request with a 403.
+            expr: |
+              sum by (user, verb, resource, namespace, name, source_ip) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    |= "pod-security.kubernetes.io/enforce-policy"
+                    | json user="user.username", iuser="impersonatedUser.username", verb="verb", resource="objectRef.resource", namespace="objectRef.namespace", name="objectRef.name", code="responseStatus.code", source_ip="sourceIPs[0]"
+                    | label_format user=`{{ if .iuser }}{{ .iuser }}{{ else }}{{ .user }}{{ end }}`
+                    | code="403"
+                  [2m]
+                )
+              ) > 0
+            labels:
+              severity: high
+              source: loki-audit
+              service: k8s-audit
+              protected: "true"
+              rule_ref: "100212"
+              mitre: T1611
+            annotations:
+              summary: "Pod Security rejected {{ $labels.user }} {{ $labels.verb }} {{ $labels.resource }} in namespace '{{ $labels.namespace }}'"
+      - name: falco
+        # Falco reaches Alertmanager only through these rules (falcosidekick's Alertmanager output is off), so one place decides the tier.
+        # Excluded: image-layer unpacking on the node (containerd paths), which Falco reads as log tampering.
+        rules:
+          - alert: FalcoWarning
+            expr: |
+              sum by (rule, priority, hostname, k8s_ns_name, k8s_pod_name, proc_cmdline) (
+                count_over_time(
+                  {priority="Warning", rule!~"Netcat Remote Code Execution in Container|Redirect STDOUT/STDIN to Network Connection in Container|Search Private Keys or Passwords|Detect release_agent File Container Escapes|Linux Kernel Module Injection Detected|Debugfs Launched in Privileged Container|PTRACE attached to process|PTRACE anti-debug attempt|Execution from /dev/shm|Fileless execution via memfd_create|Clear Log Activities|Remove Bulk Data from Disk|Create Symlink Over Sensitive Files|Create Hardlink Over Sensitive Files|Packet socket created in container|Find AWS Credentials|Run shell untrusted|Contact K8S API Server From Container|Terminal shell in container|Read sensitive file.*|Drop and execute new binary in container"}
+                    !~ "file=/var/lib/rancher/k3s/agent/containerd/"
+                    | regexp "command=(?P<proc_cmdline>.*?) terminal="
+                  [2m]
+                )
+              ) > 0
+            labels:
+              severity: warning
+              source: falco
+              service: falco
+              protected: "true"
+              rule_ref: "100102"
+            annotations:
+              summary: "Falco (Warning): {{ $labels.rule }}"
+          - alert: FalcoCritical
+            expr: |
+              sum by (rule, priority, hostname, k8s_ns_name, k8s_pod_name, proc_cmdline) (
+                count_over_time(
+                  {priority=~"Error|Critical|Alert|Emergency", rule!~"Netcat Remote Code Execution in Container|Redirect STDOUT/STDIN to Network Connection in Container|Search Private Keys or Passwords|Detect release_agent File Container Escapes|Linux Kernel Module Injection Detected|Debugfs Launched in Privileged Container|PTRACE attached to process|PTRACE anti-debug attempt|Execution from /dev/shm|Fileless execution via memfd_create|Clear Log Activities|Remove Bulk Data from Disk|Create Symlink Over Sensitive Files|Create Hardlink Over Sensitive Files|Packet socket created in container|Find AWS Credentials|Run shell untrusted|Contact K8S API Server From Container|Terminal shell in container|Read sensitive file.*|Drop and execute new binary in container"}
+                    !~ "file=/var/lib/rancher/k3s/agent/containerd/"
+                    | regexp "command=(?P<proc_cmdline>.*?) terminal="
+                  [2m]
+                )
+              ) > 0
+            labels:
+              severity: critical
+              source: falco
+              service: falco
+              protected: "true"
+              rule_ref: "100103"
+            annotations:
+              summary: "Falco ({{ $labels.priority }}): {{ $labels.rule }}"
+          - alert: FalcoAttackBehaviour
+            # Same list as production 100214, whatever the Falco priority.
+            # shortcut: the Grafana pod is exempt because its plugin opens a packet socket at start; drop the exemption when that plugin is removed.
+            expr: |
+              sum by (rule, priority, hostname, k8s_ns_name, k8s_pod_name, proc_cmdline) (
+                count_over_time(
+                  {rule=~"Netcat Remote Code Execution in Container|Redirect STDOUT/STDIN to Network Connection in Container|Search Private Keys or Passwords|Detect release_agent File Container Escapes|Linux Kernel Module Injection Detected|Debugfs Launched in Privileged Container|PTRACE attached to process|PTRACE anti-debug attempt|Execution from /dev/shm|Fileless execution via memfd_create|Clear Log Activities|Remove Bulk Data from Disk|Create Symlink Over Sensitive Files|Create Hardlink Over Sensitive Files|Packet socket created in container|Find AWS Credentials", k8s_pod_name!~"kps-grafana-.*"}
+                    !~ "file=/var/lib/rancher/k3s/agent/containerd/"
+                    | regexp "command=(?P<proc_cmdline>.*?) terminal="
+                  [2m]
+                )
+              ) > 0
+            labels:
+              severity: critical
+              source: falco
+              service: falco
+              protected: "true"
+              rule_ref: "100214"
+            annotations:
+              summary: "Falco attack behaviour: {{ $labels.rule }}"
+          - alert: FalcoTerminalShell
+            expr: |
+              sum by (rule, priority, hostname, k8s_ns_name, k8s_pod_name, proc_cmdline) (
+                count_over_time(
+                  {rule="Terminal shell in container"}
+                    | regexp "command=(?P<proc_cmdline>.*?) terminal="
+                  [2m]
+                )
+              ) > 0
+            labels:
+              severity: warning
+              source: falco
+              service: falco
+              protected: "true"
+              rule_ref: "100110"
+              mitre: T1059.004
+            annotations:
+              summary: "Falco: terminal shell in container"
+          - alert: FalcoReadSensitiveFile
+            expr: |
+              sum by (rule, priority, hostname, k8s_ns_name, k8s_pod_name, proc_cmdline) (
+                count_over_time(
+                  {rule=~"Read sensitive file.*"}
+                    | regexp "command=(?P<proc_cmdline>.*?) terminal="
+                  [2m]
+                )
+              ) > 0
+            labels:
+              severity: high
+              source: falco
+              service: falco
+              protected: "true"
+              rule_ref: "100111"
+              mitre: T1003.008
+            annotations:
+              summary: "Falco: {{ $labels.rule }}"
+          - alert: FalcoNewBinaryExecuted
+            expr: |
+              sum by (rule, priority, hostname, k8s_ns_name, k8s_pod_name, proc_cmdline) (
+                count_over_time(
+                  {rule="Drop and execute new binary in container"}
+                    | regexp "command=(?P<proc_cmdline>.*?) terminal="
+                  [2m]
+                )
+              ) > 0
+            labels:
+              severity: critical
+              source: falco
+              service: falco
+              protected: "true"
+              rule_ref: "100112"
+              mitre: T1105
+            annotations:
+              summary: "Falco: binary dropped and executed in container"
+      - name: app-logs
+        rules:
+          - alert: AppErrorLogs
+            # Complements the trace-based 5xx rule: catches errors that never become a 5xx span.
+            expr: |
+              sum by (namespace, app) (
+                count_over_time({level="error", namespace!~"kube-system|observability|falco"}[2m])
+              ) > 5
+            for: 1m
+            labels:
+              severity: warning
+              source: loki
+              service: "{{ $labels.app }}"
+              protected: "false"
+            annotations:
+              summary: "{{ $value | humanize }} error log lines in 2m from {{ $labels.namespace }}/{{ $labels.app }}"
+          - alert: AppAuthFailures
+            # Sample apps log no client_ip, so this groups by route and pod app; the client_ip label appears once an app logs it.
+            expr: |
+              sum by (namespace, app, route, client_ip) (
+                count_over_time(
+                  {namespace="shop", app!=""}
+                    | json route="route", status="status", client_ip="client_ip"
+                    | status=~"401|403"
+                  [10m]
+                )
+              ) >= 5
+            labels:
+              severity: high
+              source: loki
+              service: "{{ $labels.app }}"
+              protected: "true"
+              rule_ref: "100233/100234"
+              mitre: T1110
+            annotations:
+              summary: "{{ $value | printf `%.0f` }} auth failures (401/403) in 10m on {{ $labels.app }} {{ $labels.route }} {{ $labels.client_ip }}"

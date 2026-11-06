@@ -62,6 +62,16 @@ decision and what was given up.
   ≥ 90 % sent unchanged (spec 001, SC-009).
 - **Trade-off:** slower to reach full automation.
 
+## D-10 · Deterministic gate before any model call
+
+- **Context:** many alerts are transient: a new pod returns 5xx while it starts, a rollout replaces pods, one
+  restart then stability. Sending those to a model costs money and adds noise.
+- **Decision:** two layers. Alertmanager inhibits 5xx / restart / replicas-missing alerts of a service while that
+  service is rolling out. The harness then holds remaining non-protected alerts for a grace period and checks pod age,
+  rollout state and error count through the read-only API; only what is still failing reaches a sub-agent.
+  Protected alerts (security, audit, runtime, node, storage, certificates) skip the gate.
+- **Trade-off:** a real bug introduced by a release is diagnosed a few minutes later (rollout + grace), never missed.
+
 ## D-09 · Spec-Driven Development with GitHub Spec Kit
 
 - **Context:** the project is built mostly by a coding agent and published as a portfolio piece.

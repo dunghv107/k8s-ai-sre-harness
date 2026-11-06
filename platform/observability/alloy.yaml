@@ -1,0 +1,151 @@
+controller:
+  type: daemonset
+  volumes:
+    extra:
+      # Alloy WAL and positions need a writable path while the root filesystem stays read-only.
+      - {name: alloy-data, emptyDir: {}}
+
+alloy:
+  extraEnv:
+    # Pod logs are tailed per node, so each instance filters on its own node.
+    - name: NODE_NAME
+      valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+  extraPorts:
+    - {name: otlp-grpc, port: 4317, targetPort: 4317, protocol: TCP}
+    - {name: otlp-http, port: 4318, targetPort: 4318, protocol: TCP}
+  mounts:
+    extra:
+      - {name: alloy-data, mountPath: /tmp/alloy}
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities: {drop: [ALL]}
+    seccompProfile: {type: RuntimeDefault}
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 256Mi}
+  configMap:
+    content: |
+      // ---- traces: OTLP in, Tempo + span metrics out ----
+      otelcol.receiver.otlp "default" {
+        grpc { endpoint = "0.0.0.0:4317" }
+        http { endpoint = "0.0.0.0:4318" }
+        output {
+          traces = [otelcol.processor.batch.default.input, otelcol.connector.spanmetrics.default.input]
+        }
+      }
+
+      otelcol.processor.batch "default" {
+        output { traces = [otelcol.exporter.otlp.tempo.input] }
+      }
+
+      otelcol.exporter.otlp "tempo" {
+        client {
+          endpoint = "tempo.observability.svc:4317"
+          // Plain gRPC: in-cluster Service, Tempo has no TLS here.
+          tls { insecure = true }
+        }
+      }
+
+      // Produces traces_span_metrics_calls_total and traces_span_metrics_duration_* used by the 5xx alert.
+      otelcol.connector.spanmetrics "default" {
+        namespace = "traces.span.metrics"
+        metrics_flush_interval = "15s"
+        histogram {
+          explicit { buckets = ["50ms", "100ms", "250ms", "500ms", "1s", "2s", "5s"] }
+        }
+        dimension { name = "http.route" }
+        dimension { name = "http.response.status_code" }
+        dimension { name = "http.request.method" }
+        dimension { name = "service.namespace" }
+        output { metrics = [otelcol.exporter.prometheus.default.input] }
+      }
+
+      otelcol.exporter.prometheus "default" {
+        include_target_info = false
+        forward_to = [prometheus.relabel.instance.receiver]
+      }
+
+      // Every DaemonSet pod derives its own span metrics; a per-instance label stops identical series colliding.
+      prometheus.relabel "instance" {
+        forward_to = [prometheus.remote_write.prom.receiver]
+        rule {
+          action = "replace"
+          target_label = "alloy_instance"
+          replacement = sys.env("HOSTNAME")
+        }
+      }
+
+      prometheus.remote_write "prom" {
+        endpoint { url = "http://kps-prometheus.observability.svc:9090/api/v1/write" }
+      }
+
+      // ---- pod logs: this node's pods to Loki ----
+      discovery.kubernetes "pods" {
+        role = "pod"
+        selectors {
+          role  = "pod"
+          field = "spec.nodeName=" + sys.env("NODE_NAME")
+        }
+      }
+
+      discovery.relabel "pods" {
+        targets = discovery.kubernetes.pods.targets
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          regex         = "(.+)"
+          target_label  = "app"
+        }
+        // Wins over the plain app label when both exist.
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+          regex         = "(.+)"
+          target_label  = "app"
+        }
+      }
+
+      loki.source.kubernetes "pods" {
+        targets    = discovery.relabel.pods.output
+        forward_to = [loki.process.pods.receiver]
+      }
+
+      loki.process "pods" {
+        forward_to = [loki.write.default.receiver]
+        stage.json {
+          expressions = { level = "level", trace_id = "trace_id" }
+        }
+        // level has a handful of values, so it is safe as a label.
+        stage.labels {
+          values = { level = "" }
+        }
+        // trace_id is unbounded, so it stays structured metadata and never becomes a label.
+        stage.structured_metadata {
+          values = { trace_id = "" }
+        }
+      }
+
+      loki.write "default" {
+        endpoint { url = "http://loki.observability.svc:3100/loki/api/v1/push" }
+      }
+
+# Receives OTLP from the apps; reached as alloy.observability.svc.
+service:
+  enabled: true
+configReloader:
+  resources:
+    requests: {cpu: 5m, memory: 16Mi}
+    limits: {memory: 32Mi}

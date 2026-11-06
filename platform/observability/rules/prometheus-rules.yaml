@@ -1,0 +1,135 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: homelab-apps
+  namespace: observability
+  labels: {app.kubernetes.io/part-of: homelab-siem}
+spec:
+  groups:
+    - name: apps
+      rules:
+        - alert: Http5xxRate
+          # Server spans only; status_code is used because old-semconv SDKs emit no http_response_status_code but always mark 5xx as ERROR.
+          expr: |
+            sum by (service_name, service_namespace, http_route) (
+              rate(traces_span_metrics_calls_total{span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}[2m])
+            ) > 0
+          for: 1m
+          labels:
+            severity: critical
+            source: prometheus
+            service: "{{ $labels.service_name }}"
+            namespace: "{{ $labels.service_namespace }}"
+            protected: "false"
+          annotations:
+            summary: "5xx responses from {{ $labels.service_name }} on {{ $labels.http_route }} ({{ $value | humanize }}/s)"
+        - alert: ServiceRollingOut
+          # Silent marker (routed to the null receiver): inhibits noisy alerts while a Deployment rolls out, plus 2m of grace.
+          expr: |
+            max by (namespace, deployment) (
+              max_over_time((
+                (kube_deployment_status_observed_generation{namespace="shop"} != kube_deployment_metadata_generation{namespace="shop"})
+                or (kube_deployment_status_replicas_updated{namespace="shop"} < kube_deployment_spec_replicas{namespace="shop"})
+                or (kube_deployment_status_replicas_unavailable{namespace="shop"} > 0)
+              )[2m:15s])
+            )
+          for: 0m
+          labels:
+            severity: none
+            source: prometheus
+            service: "{{ $labels.deployment }}"
+            protected: "false"
+          annotations:
+            summary: "Deployment {{ $labels.namespace }}/{{ $labels.deployment }} is rolling out"
+        - alert: PodRestartingFrequently
+          # service is the pod name minus the ReplicaSet/pod hash, so it equals the Deployment name and ServiceRollingOut can inhibit it.
+          expr: |
+            label_replace(
+              label_replace(increase(kube_pod_container_status_restarts_total[10m]) >= 3, "service", "$1", "pod", "(.*)"),
+              "service", "$1", "pod", "(.*)-[a-z0-9]{6,10}-[a-z0-9]{5}"
+            )
+          labels:
+            severity: warning
+            source: prometheus
+            protected: "false"
+          annotations:
+            summary: "Container {{ $labels.container }} in {{ $labels.namespace }}/{{ $labels.pod }} restarted {{ printf `%.0f` $value }} times in 10m"
+        - alert: DeploymentReplicasMissing
+          # for: 3m keeps demos quick; use 15m in production.
+          expr: kube_deployment_status_replicas_available < kube_deployment_spec_replicas
+          for: 3m
+          labels:
+            severity: warning
+            source: prometheus
+            service: "{{ $labels.deployment }}"
+            protected: "false"
+          annotations:
+            summary: "Deployment {{ $labels.namespace }}/{{ $labels.deployment }} has fewer available replicas than desired"
+        - alert: PodOOMKilled
+          expr: |
+            increase(kube_pod_container_status_restarts_total[5m]) > 0
+            and on (namespace, pod, container)
+            kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+          labels:
+            severity: warning
+            source: prometheus
+            service: "{{ $labels.pod }}"
+            protected: "false"
+          annotations:
+            summary: "Container {{ $labels.container }} in {{ $labels.namespace }}/{{ $labels.pod }} was OOMKilled"
+        - alert: HubblePolicyDrops
+          # Add drop:labelsContext=source_namespace,destination_namespace to the Cilium hubble metrics to get namespaces here.
+          expr: sum by (reason, source_namespace, destination_namespace) (rate(hubble_drop_total{reason="POLICY_DENIED"}[2m])) > 0
+          for: 2m
+          labels:
+            severity: warning
+            source: hubble
+            service: network
+            namespace: "{{ $labels.source_namespace }}"
+            protected: "false"
+          annotations:
+            summary: "Traffic denied by NetworkPolicy ({{ $value | humanize }} drops/s)"
+    - name: platform
+      rules:
+        - alert: NodeMemoryHigh
+          expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.85
+          for: 5m
+          labels:
+            severity: warning
+            source: prometheus
+            service: node
+            protected: "true"
+          annotations:
+            summary: "Node {{ $labels.instance }} memory above 85% ({{ $value | humanizePercentage }})"
+        - alert: NodeNotReady
+          expr: kube_node_status_condition{condition="Ready", status="true"} == 0
+          for: 2m
+          labels:
+            severity: critical
+            source: prometheus
+            service: node
+            namespace: kube-system
+            protected: "true"
+          annotations:
+            summary: "Node {{ $labels.node }} is not Ready"
+        - alert: PersistentVolumeAlmostFull
+          expr: kubelet_volume_stats_available_bytes / kubelet_volume_stats_capacity_bytes < 0.1
+          for: 5m
+          labels:
+            severity: warning
+            source: prometheus
+            service: storage
+            protected: "true"
+          annotations:
+            summary: "PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} has less than 10% free"
+        - alert: CertificateExpiringSoon
+          # Fires only once cert-manager exports this metric.
+          expr: (certmanager_certificate_expiration_timestamp_seconds - time()) < 7 * 24 * 3600
+          for: 10m
+          labels:
+            severity: warning
+            source: prometheus
+            service: "{{ $labels.name }}"
+            protected: "true"
+          annotations:
+            summary: "Certificate {{ $labels.namespace }}/{{ $labels.name }} expires in less than 7 days"

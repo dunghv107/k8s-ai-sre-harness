@@ -14,7 +14,13 @@ hubble:
   ui:
     enabled: true
   metrics:
-    enabled: [dns, drop, tcp, flow, "httpV2:exemplars=true"]
+    # Namespace context lets the policy-drop alert name the affected app.
+    enabled:
+      - dns
+      - "drop:labelsContext=source_namespace,source_workload,destination_namespace,destination_workload"
+      - tcp
+      - flow
+      - "httpV2:exemplars=true"
     serviceMonitor:
       enabled: false
 prometheus:
