@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Triggers each homelab detection on demand; see docs/demo.md for the 10-minute walkthrough.
+# Triggers each lab detection on demand; see docs/demo.md for the 10-minute walkthrough.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -30,7 +30,7 @@ svc_url() { echo "http://127.0.0.1:18001/api/v1/namespaces/$NS/services/$1:$2/pr
 pf() {
   kubectl -n "$NS" port-forward "pod/$1" "$2:8080" >/dev/null 2>&1 &
   PF_PID=$!
-  PIDS+=($PF_PID)
+  PIDS+=("$PF_PID")
   for _ in $(seq 1 40); do
     (echo >"/dev/tcp/127.0.0.1/$2") 2>/dev/null && return 0
     sleep 0.5
@@ -121,6 +121,7 @@ case "${1:-}" in
     else
       echo "warning: stdin is not a terminal, so no TTY is allocated and Falco stays quiet (the audit alert still fires)" >&2
     fi
+    # shellcheck disable=SC2016 # the command must expand inside the pod, not locally
     "${run[@]}" -n "$NS" exec $flags "$pod" -- sh -c 'echo "shell on $(hostname) as uid $(id -u)"; ls /; sleep 3'
     ;;
   secret)

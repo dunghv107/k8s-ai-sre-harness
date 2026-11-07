@@ -1,4 +1,4 @@
-# Feature Specification: Nền tảng homelab Kubernetes mô phỏng môi trường production
+# Feature Specification: Nền tảng lab Kubernetes mô phỏng môi trường production
 
 **Feature Branch**: `002-homelab-platform`
 
@@ -6,13 +6,13 @@
 
 **Status**: Draft
 
-**Input**: User description: "Dựng homelab chạy full Docker trên chính máy của tôi: một cụm k3s mini có đủ
+**Input**: User description: "Dựng lab mô phỏng production chạy full Docker trên chính máy của tôi: một cụm k3s mini có đủ
 tính năng như cụm Kubernetes production (CNI, NetworkPolicy, audit log, runtime security, giám sát, GitOps),
 có app mẫu sinh lỗi để agent ở spec 001 có cảnh báo thật mà xử lý. Repo public để làm demo trong CV."
 
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - Dựng và gỡ cả homelab bằng một lệnh (Priority: P1)
+### User Story 1 - Dựng và gỡ cả lab bằng một lệnh (Priority: P1)
 
 Người vận hành chạy một lệnh trên máy Windows có Docker Desktop và sau vài phút có một cụm nhiều node, đủ
 thành phần nền tảng, mọi thứ lấy từ repo. Một lệnh khác gỡ sạch. Người xem repo (nhà tuyển dụng) làm lại
@@ -28,7 +28,7 @@ phần báo sẵn sàng; gỡ rồi dựng lại, kết quả giống hệt.
 1. **Given** máy có Docker Desktop và các CLI ghi trong README, **When** chạy lệnh dựng, **Then** có cụm
    1 node điều khiển + 2 node worker, mọi thành phần nền tảng ở trạng thái sẵn sàng.
 2. **Given** cụm đang chạy, **When** chạy lệnh gỡ, **Then** không còn container, network hay volume nào
-   của homelab trên máy.
+   của lab mô phỏng production trên máy.
 3. **Given** một thay đổi cấu hình được commit vào repo, **When** công cụ GitOps đồng bộ, **Then** cụm
    phản ánh thay đổi đó mà không cần lệnh tay lên cụm.
 
@@ -80,7 +80,7 @@ Cụm áp dụng các lớp bảo vệ như production: CNI có NetworkPolicy m�
 admission chỉ nhận image từ registry được phép và Pod đạt chuẩn bảo mật; audit log của API server; giám sát
 runtime trong container; bí mật chỉ nằm trong repo ở dạng đã mã hoá.
 
-**Why this priority**: Làm homelab sát thực tế và sinh ra các loại cảnh báo bảo mật cho agent, nhưng không
+**Why this priority**: Làm lab mô phỏng production sát thực tế và sinh ra các loại cảnh báo bảo mật cho agent, nhưng không
 chặn luồng chính.
 
 **Independent Test**: Thử từng hành vi bị cấm và kiểm nó bị chặn kèm cảnh báo.
@@ -100,7 +100,7 @@ chặn luồng chính.
 
 ### User Story 5 - Tài liệu và repo đủ để làm portfolio (Priority: P2)
 
-Người đọc repo hiểu được luồng homelab trong 5 phút: sơ đồ kiến trúc, luồng cảnh báo, các quyết định thiết
+Người đọc repo hiểu được luồng lab mô phỏng production trong 5 phút: sơ đồ kiến trúc, luồng cảnh báo, các quyết định thiết
 kế và lý do, cách chạy, cách demo. Không có bí mật hay thông tin của tổ chức khác.
 
 **Why this priority**: Repo là sản phẩm trưng bày trong CV.
@@ -122,14 +122,14 @@ nào, agent làm gì, chạy thử thế nào.
 - Docker Desktop chưa bật: lệnh dựng báo rõ, không treo.
 - Máy khởi động lại: cụm lên lại được bằng một lệnh, dữ liệu giám sát gần nhất còn giữ.
 - Tải image chậm hoặc lỗi mạng: lệnh dựng thử lại có giới hạn, báo thành phần nào chưa lên.
-- Người xem repo không có Telegram bot hay khoá OpenAI: homelab vẫn dựng được; agent chạy chế độ demo không
+- Người xem repo không có Telegram bot hay khoá OpenAI: lab mô phỏng production vẫn dựng được; agent chạy chế độ demo không
   gọi ra ngoài.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: Homelab MUST chạy hoàn toàn trong Docker trên một máy Windows 11 có Docker Desktop (WSL2),
+- **FR-001**: Lab mô phỏng production MUST chạy hoàn toàn trong Docker trên một máy Windows 11 có Docker Desktop (WSL2),
   không cần dịch vụ cloud nào ngoài Telegram và nhà cung cấp mô hình của spec 001.
 - **FR-002**: Cụm MUST có 1 node điều khiển và 2 node worker, là Kubernetes đạt chuẩn conformance.
 - **FR-003**: Toàn bộ cấu hình nền tảng và app MUST nằm trong repo và được đồng bộ vào cụm bằng GitOps; chỉ
@@ -145,7 +145,7 @@ nào, agent làm gì, chạy thử thế nào.
   replica, CPU/RAM node cao, Pod OOMKilled, luồng mạng bị chặn bất thường, sự kiện runtime security, thao tác
   audit nhạy cảm (đọc/liệt kê Secret ngoài các controller đã biết, `exec` vào Pod).
 - **FR-010**: Mọi cảnh báo và thông báo "đã hết" MUST được đẩy tới đầu nhận của agent spec 001 trong nội bộ cụm.
-- **FR-011**: Homelab MUST có app mẫu thuộc 2 dự án, mỗi app có develop và production, có endpoint kích lỗi
+- **FR-011**: Lab mô phỏng production MUST có app mẫu thuộc 2 dự án, mỗi app có develop và production, có endpoint kích lỗi
   (5xx, crash, OOM, chậm, mất phụ thuộc) và một lệnh chạy kịch bản "bão".
 - **FR-012**: Bí mật MUST chỉ nằm trong repo ở dạng đã mã hoá cho đúng cụm, hoặc dạng placeholder; giá trị
   thật nạp từ file `.env` cục bộ không commit.
@@ -170,8 +170,8 @@ nào, agent làm gì, chạy thử thế nào.
 
 ### Measurable Outcomes
 
-- **SC-001**: Từ máy đã có image cache, dựng xong toàn bộ homelab trong dưới 15 phút; gỡ trong dưới 2 phút.
-- **SC-002**: Homelab dùng không quá 10 GB RAM khi chạy ổn định, để máy 24 GB vẫn làm việc bình thường.
+- **SC-001**: Từ máy đã có image cache, dựng xong toàn bộ lab mô phỏng production trong dưới 15 phút; gỡ trong dưới 2 phút.
+- **SC-002**: Lab mô phỏng production dùng không quá 10 GB RAM khi chạy ổn định, để máy 24 GB vẫn làm việc bình thường.
 - **SC-003**: 100% loại lỗi trong FR-009 kích được bằng app mẫu hoặc thao tác ghi trong README, và đều sinh
   cảnh báo tới agent trong vòng 2 phút.
 - **SC-004**: Người chưa biết dự án làm theo README thấy được tin chẩn đoán đầu tiên trên Telegram trong dưới
@@ -181,7 +181,7 @@ nào, agent làm gì, chạy thử thế nào.
 
 ## Assumptions
 
-- Máy chủ homelab: Windows 11, 24 GB RAM, 12 luồng CPU, Docker Desktop (WSL2). Giới hạn RAM cho WSL khoảng
+- Máy chủ lab: Windows 11, 24 GB RAM, 12 luồng CPU, Docker Desktop (WSL2). Giới hạn RAM cho WSL khoảng
   12 GB.
 - Lựa chọn công cụ (người vận hành đã chốt, chi tiết và lý do ở `docs/decisions.md`): k3s chạy trong Docker
   bằng k3d; Cilium + Hubble thay CNI mặc định; Falco thay Wazuh vì RAM; Kyverno cho admission; ArgoCD cho

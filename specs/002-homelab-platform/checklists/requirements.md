@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Nền tảng homelab Kubernetes mô phỏng môi trường production
+# Specification Quality Checklist: Nền tảng lab Kubernetes mô phỏng môi trường production
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2026-11-06

@@ -1,0 +1,14 @@
+# Keep the default ruleset and only allow the two known false positives below.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Fake AWS key used as a redaction test fixture"
+condition = "AND"
+paths = ['''agent/tests/unit/test_redact\.py''']
+regexes = ['''AKIAABCDEFGHIJKLMNOP''']
+
+[[allowlists]]
+description = "Prose listing Prometheus/Loki/Tempo is flagged as a generic key"
+paths = ['''README\.md''', '''docs/harness/.*\.md''']
+regexes = ['''Prometheus/Loki/Tempo''']

@@ -6,7 +6,7 @@
 
 **Status**: Draft
 
-**Input**: User description: "Homelab. Người vận hành làm 8h30–17h30; cảnh báo ngoài giờ không ai xử lý, dồn
+**Input**: User description: "Lab mô phỏng production. Người vận hành làm 8h30–17h30; cảnh báo ngoài giờ không ai xử lý, dồn
 sang sáng (vd 100 cảnh báo thì 80 là lỗi 5xx trùng của cùng một app). Cần một AI agent harness xử lý **ngay
 khi nhận cảnh báo**; nếu nhiều cảnh báo trong thời gian ngắn (vd 10 cảnh báo trong 2 phút) thì chia sub-agent
 xử lý song song. Mỗi sub-agent đọc log Pod bằng token chỉ đọc, đối chiếu Grafana, chẩn đoán. Đầu ra ban đầu là
@@ -177,14 +177,14 @@ sự cố nào chưa phân tích được và vì sao.
   rotate" lên đầu.
 - Nội dung lạ trong log/cảnh báo (prompt injection): coi là dữ liệu, không làm theo.
 - Lệnh trong Telegram từ người không có quyền: bỏ qua và ghi log.
-- Máy chủ homelab tắt hoặc ngủ: cảnh báo trong lúc đó không được xử lý; bảng sáng ghi rõ khoảng thời gian
+- Máy chủ lab tắt hoặc ngủ: cảnh báo trong lúc đó không được xử lý; bảng sáng ghi rõ khoảng thời gian
   hệ thống không hoạt động.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: Hệ thống MUST nhận cảnh báo đẩy tới từ các nguồn giám sát của homelab ngay khi chúng bắn, kể
+- **FR-001**: Hệ thống MUST nhận cảnh báo đẩy tới từ các nguồn giám sát của lab mô phỏng production ngay khi chúng bắn, kể
   cả thông báo "đã hết".
 - **FR-002**: Hệ thống MUST gộp cảnh báo thành sự cố theo dấu vân tay (nguồn, cụm, namespace/app, loại lỗi,
   endpoint/thành phần), giữ danh sách cảnh báo gốc của từng sự cố.
@@ -197,12 +197,14 @@ sự cố nào chưa phân tích được và vì sao.
 - **FR-006**: Cảnh báo trùng với sự cố đang mở MUST NOT sinh tin mới, trừ khi mức nghiêm trọng tăng, sự cố
   hồi phục, hoặc sự cố quay lại sau khi đã hết.
 - **FR-007**: Sub-agent MUST đọc log Pod và Event của app liên quan trong khoảng thời gian sự cố bằng thông
-  tin xác thực chỉ đọc; MUST NOT đọc Secret, `exec`, hay sửa tài nguyên cụm.
+  tin xác thực chỉ đọc; MUST NOT đọc Secret, `exec`, hay sửa tài nguyên cụm. Quyền đọc gồm cả NetworkPolicy
+  trong namespace được phép (chỉ `get/list/watch`).
 - **FR-008**: Sub-agent MUST đối chiếu số liệu Grafana (tỉ lệ lỗi, độ trễ, tài nguyên, restart) và log đã
   lưu cùng khoảng thời gian, bằng quyền chỉ xem.
 - **FR-009**: Mỗi tin chẩn đoán MUST có: mức nghiêm trọng, số lần, đầu/cuối, trạng thái, nhãn (hạ tầng /
   nghiệp vụ / chưa rõ), chẩn đoán ngắn, mức tin cậy, bằng chứng (ID cảnh báo, đoạn log đã che, đường dẫn
-  Grafana), việc nên làm.
+  Grafana), việc nên làm, và mục "Chỉ người làm được" (`human_checks`, tối đa 3 việc agent không được phép tự làm:
+  exec, đọc Secret, sửa/hoàn tác; không liệt kê việc agent đã kiểm).
 - **FR-010**: Hệ thống MUST che token, mật khẩu, khoá, cookie, header xác thực và dữ liệu cá nhân trong mọi
   đoạn log và nội dung cảnh báo trước khi đưa vào phân tích, gửi ra mô hình hay đầu ra.
 - **FR-011**: Chỉ đoạn log **đã che** cần cho chẩn đoán được gửi tới dịch vụ mô hình; không gửi nguyên file log.
@@ -250,6 +252,20 @@ sự cố nào chưa phân tích được và vì sao.
   vụ đó đang rollout, để Telegram không nhận tin chuyển tiếp ngay cả khi harness chưa chạy.
 - **FR-033**: Mẫu từng tự hết nhiều lần (cùng dấu vân tay, ≥3 lần trong 7 ngày) MUST được kéo dài thời gian ân hạn tự động
   và được ghi là "hay tự hết" trong bảng, để người vận hành quyết định sửa gốc hay đánh dấu nhiễu tin cậy.
+- **FR-034**: Trước vòng gọi công cụ của mô hình, hệ thống MUST dựng một gói ngữ cảnh xác định (không dùng mô hình) từ
+  các nguồn chỉ đọc: trạng thái từng container (kể cả lý do và mã thoát của lần chạy trước, requests/limits), event
+  30 phút, rollout, NetworkPolicy kèm thời điểm và người sửa gần nhất, các thao tác ghi 60 phút gần nhất trong audit
+  log (Loki `{job="k8s-audit"}`) và đuôi log container trước của pod vừa chết. Gói bị cắt cứng 9 000 ký tự, che bí
+  mật, đọc lỗi thì ghi `(unavailable: ...)` chứ không dừng.
+- **FR-035**: Prompt MUST có luật quyết định (OOMKilled/137 + limit, exit khác 0 + panic ở log trước, timeout +
+  NetworkPolicy vừa bị sửa, 5xx + exception); `unknown` chỉ dùng khi gói ngữ cảnh và công cụ thật sự thiếu bằng chứng.
+- **FR-036**: Engine điều tra chọn được bằng `AGENT_ENGINE`; mặc định `fallback`: agent native chạy trước, chỉ khi
+  kết luận `unknown` hoặc tin cậy `low` mới hỏi HolmesGPT đúng một lần; gửi một tin cuối gắn `[native]` hoặc
+  `[holmes]`; mọi lần chạy ghi vào `runs` kèm chi phí và cộng vào trần ngày. `native`, `holmes`, `both` (so sánh) vẫn
+  dùng được. Không còn bước chạy lại bằng mô hình mạnh khi tin cậy thấp; mô hình mạnh chỉ dành cho sự cố bảo vệ.
+- **FR-037**: Sự cố có namespace ngoài danh sách được phép MUST NOT gọi mô hình: chuyển `reported_only`, ghi lý do
+  vào `gate_reason`, gửi một tin ngắn.
+- **FR-038**: Verdict của từng lần chạy MUST được lưu theo lần chạy (`runs.verdict`) để chấm điểm từng engine.
 
 ### Key Entities
 
@@ -261,7 +277,8 @@ sự cố nào chưa phân tích được và vì sao.
 - **Mẫu nhiễu (Noise Pattern)**: tiêu chí nhận diện nhiễu, trạng thái tin cậy.
 - **Dự án (Project)**: nhóm namespace/app, kênh dev, công tắc gửi thẳng.
 - **Tin cho dev (Dev Message)**: nội dung soạn, sự cố liên quan, trạng thái (soạn / gửi nguyên văn / sửa / bỏ / gửi thẳng).
-- **Phiên phân tích (Analysis Run)**: một lần sub-agent chạy; thời gian, chi phí, kết quả, lỗi.
+- **Phiên phân tích (Analysis Run)**: một lần sub-agent chạy; engine (native/holmes), thời gian, chi phí, verdict riêng, kết quả, lỗi.
+- **Gói ngữ cảnh (Context Pack)**: bản chụp trạng thái cụm dựng sẵn trước vòng mô hình (FR-034).
 - **Bảng tóm tắt (Morning Report)**: tổng hợp sự cố ngoài giờ.
 
 ## Success Criteria *(mandatory)*
@@ -286,8 +303,8 @@ sự cố nào chưa phân tích được và vì sao.
 
 ## Assumptions
 
-- Chạy trên homelab trên máy của người vận hành; các nguồn cảnh báo, Grafana và cụm Kubernetes đều thuộc
-  homelab (spec nền tảng homelab tách riêng). Muốn xử lý ban đêm thì máy phải bật và không ngủ.
+- Chạy trên lab mô phỏng production trên máy của người vận hành; các nguồn cảnh báo, Grafana và cụm Kubernetes đều thuộc
+  lab mô phỏng production (spec nền tảng tách riêng). Muốn xử lý ban đêm thì máy phải bật và không ngủ.
 - Nguồn cảnh báo dự kiến: cảnh báo Grafana/Alertmanager (5xx theo endpoint, Pod restart, thiếu replica, tài
   nguyên node), runtime security và audit log của cụm, sự kiện mạng/CNI.
 - Kênh tin nhắn là Telegram: một nhóm cảnh báo cho người vận hành; ở giai đoạn 2 mỗi dự án có kênh dev riêng.
@@ -296,6 +313,7 @@ sự cố nào chưa phân tích được và vì sao.
   5 phút; cửa sổ khởi động Pod 3 phút, thời gian ân hạn sau rollout 2 phút, ngưỡng tối thiểu 3 lỗi trong 2 phút;
   đều chỉnh được.
 - Mô hình chạy qua OpenAI API (khoá API của người vận hành, nạp qua kho bí mật), chỉ nhận đoạn log đã che.
+- HolmesGPT chạy như Deployment riêng trong namespace `alerting`, chỉ đọc namespace `shop`, dùng làm dự phòng (FR-036).
 - Danh sách loại bảo vệ mặc định: runtime security, audit log, mất node, lưu trữ, chứng chỉ; chỉnh được.
 - Phiên bản này không tự sửa hay restart bất cứ gì; mọi khắc phục do người.
 - Bộ cảnh báo mẫu để kiểm thử dựng lại theo định dạng phòng cảnh báo thật người vận hành từng dùng, **đã che

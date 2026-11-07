@@ -1,0 +1,101 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: alert-agent-data
+  namespace: alerting
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alert-agent
+  namespace: alerting
+  labels:
+    app.kubernetes.io/name: alert-agent
+spec:
+  replicas: 1
+  # SQLite has one writer; Recreate avoids two pods on the same volume.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: alert-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: alert-agent
+    spec:
+      serviceAccountName: alert-agent
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          image: homelab/alert-agent:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: alert-agent
+          env:
+            - {name: OPENAI_MODEL, value: gpt-6.1-terra}
+            - {name: OPENAI_MODEL_ESCALATE, value: gpt-6.1-sol}
+            - {name: AGENT_DAILY_COST_CAP_USD, value: "2"}
+            - {name: AGENT_TIMEZONE, value: Asia/Ho_Chi_Minh}
+            - {name: AGENT_BATCH_WINDOW_SECONDS, value: "60"}
+            - {name: AGENT_MAX_PARALLEL_SUBAGENTS, value: "5"}
+            - {name: AGENT_SUBAGENT_TIMEOUT_SECONDS, value: "300"}
+            - {name: AGENT_NAMESPACES, value: shop}
+            - {name: AGENT_DEMO_MODE, value: "false"}
+            # fallback (native, then HolmesGPT once when native is unknown/low) | native | holmes | both; Holmes is installed by scripts/deploy-holmes.sh
+            - {name: AGENT_ENGINE, value: fallback}
+            - {name: HOLMES_URL, value: http://holmes-holmes.alerting.svc}
+            - {name: PROMETHEUS_URL, value: http://kps-prometheus.observability.svc:9090}
+            - {name: LOKI_URL, value: http://loki.observability.svc:3100}
+            - {name: TEMPO_URL, value: http://tempo.observability.svc:3200}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            periodSeconds: 30
+            failureThreshold: 4
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 384Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: alert-agent-data
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alert-agent
+  namespace: alerting
+spec:
+  selector:
+    app.kubernetes.io/name: alert-agent
+  ports:
+    - port: 8080
+      targetPort: 8080

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Creates the k3d homelab and installs the CNI. Idempotent: re-running skips what already exists.
+# Creates the k3d lab cluster and installs the CNI. Idempotent: re-running skips what already exists.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

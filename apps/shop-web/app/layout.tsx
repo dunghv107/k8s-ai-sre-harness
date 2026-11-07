@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-export const metadata = { title: 'Homelab shop' };
+export const metadata = { title: 'Demo shop' };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (

@@ -1,6 +1,6 @@
 # Simple SIEM
 
-The homelab has no separate SIEM product. Four event sources feed the same log, metric and alert pipeline,
+The production-replica lab has no separate SIEM product. Four event sources feed the same log, metric and alert pipeline,
 and every detection ends up as an Alertmanager alert that goes to Telegram and to the AI alert agent.
 
 ## Sources and pipeline
@@ -47,13 +47,13 @@ Audit alerts carry `user`, `verb`, `resource`, `namespace` and `source_ip`, lift
 impersonated identity when the request used `--as`, so a test with `kubectl --as=system:serviceaccount:...` is judged as that
 ServiceAccount (the audit `user` field alone would say `system:admin`).
 
-## Production rule to homelab rule
+## Production rule to lab rule
 
 Same tiering as production: Wazuh level 10 and above pages the chat (`protected="true"`), lower levels stay queryable in Loki
-only. Two deliberate deviations: the homelab pages Warning-tier items (exec by a human, Falco Warning) as `warning` because the
+only. Two deliberate deviations: the lab pages Warning-tier items (exec by a human, Falco Warning) as `warning` because the
 demo wants them visible, and `system:admin` is the deployer here, so its writes are info only.
 
-| rule_ref | What | Homelab rule | Severity | Protected |
+| rule_ref | What | Lab rule | Severity | Protected |
 |---|---|---|---|---|
 | 100211 | ServiceAccount exec/attach/portforward into a Pod | `AuditExecByServiceAccount` | high | yes |
 | 100201 | Human exec/attach/portforward into a Pod | `AuditExecByUser` | warning | yes |

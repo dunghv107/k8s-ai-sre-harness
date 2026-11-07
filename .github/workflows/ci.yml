@@ -1,0 +1,151 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Read-only token everywhere; no job needs more and no secrets are used.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Tool images are pinned by version; bump them deliberately, never use latest.
+  SHELLCHECK_IMAGE: koalaman/shellcheck:v0.11.0
+  HELM_IMAGE: alpine/helm:3.19.0
+  KUBECONFORM_IMAGE: ghcr.io/yannh/kubeconform:v0.7.0
+  GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.0
+  SEMGREP_IMAGE: semgrep/semgrep:1.184.0
+  TRIVY_IMAGE: aquasec/trivy:0.69.3
+  SYFT_IMAGE: anchore/syft:v1.42.0
+
+jobs:
+  agent-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: agent/requirements*.txt
+      - name: Install and test
+        working-directory: agent
+        run: |
+          pip install -r requirements.txt -r requirements-dev.txt
+          pip install -e .
+          python -m pytest -q
+
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: shellcheck
+        run: docker run --rm -v "$PWD:/mnt" -w /mnt "$SHELLCHECK_IMAGE" scripts/*.sh
+      - name: helm lint
+        run: docker run --rm -v "$PWD:/w" -w /w "$HELM_IMAGE" lint deploy/charts/app --set image.repository=x
+      - name: kubeconform on plain manifests
+        # CRDs (Cilium, Prometheus Operator) have no bundled schema, so missing ones are skipped, not failed.
+        run: >
+          docker run --rm -v "$PWD:/w" -w /w "$KUBECONFORM_IMAGE"
+          -strict -summary -ignore-missing-schemas
+          deploy/alerting deploy/network-policies.yaml deploy/postgres
+          platform/k3d/audit-policy.yaml platform/observability/dashboards platform/observability/rules
+      - name: kubeconform on rendered chart
+        # The app chart is only valid once rendered with each service's values file.
+        run: |
+          for f in deploy/apps/*.yaml; do
+            docker run --rm -v "$PWD:/w" -w /w "$HELM_IMAGE" template ci deploy/charts/app -f "$f"
+          done | docker run --rm -i "$KUBECONFORM_IMAGE" -strict -summary -ignore-missing-schemas -
+
+  secrets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # scan the full history, not just the tip
+          persist-credentials: false
+      - name: gitleaks
+        # safe.directory avoids git's dubious-ownership refusal for the container's root user.
+        run: >
+          docker run --rm -v "$PWD:/repo"
+          -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo
+          "$GITLEAKS_IMAGE" git /repo --no-banner --redact -v
+
+  sast:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: semgrep
+        # The excluded rule fires on the word "tokens" in a usage log line in agent/src (counters, not credentials).
+        run: >
+          docker run --rm -v "$PWD:/src" -w /src
+          -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/src
+          "$SEMGREP_IMAGE" semgrep scan
+          --config p/python --config p/javascript --config p/typescript --config p/golang --config p/dockerfile
+          --exclude-rule python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+          --metrics=off --error --exclude node_modules agent apps
+
+  images:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: alert-agent, context: agent }
+          - { name: shop-web, context: apps/shop-web }
+          - { name: orders-api, context: apps/orders-api }
+          - { name: catalog-api, context: apps/catalog-api }
+          - { name: invoice-api, context: apps/invoice-api }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build (no push)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          push: false
+          load: true
+          tags: ci/${{ matrix.name }}:${{ github.sha }}
+      - name: Trivy image scan
+        # Unfixed CVEs are ignored because nothing can be done about them yet; every fixable HIGH/CRITICAL fails the build.
+        run: >
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock
+          "$TRIVY_IMAGE" image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
+          ci/${{ matrix.name }}:${{ github.sha }}
+      - name: SBOM (SPDX)
+        run: >
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/out"
+          "$SYFT_IMAGE" ci/${{ matrix.name }}:${{ github.sha }} -o spdx-json=/out/sbom-${{ matrix.name }}.spdx.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom-${{ matrix.name }}
+          path: sbom-${{ matrix.name }}.spdx.json
+          if-no-files-found: error

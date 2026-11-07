@@ -1,4 +1,4 @@
-# Homelab architecture and alert flow
+# Lab architecture and alert flow
 
 This document describes the target state defined by [spec 002](../specs/002-homelab-platform/spec.md)
 (platform) and [spec 001](../specs/001-realtime-alert-triage/spec.md) (alert agent).
@@ -10,7 +10,7 @@ This document describes the target state defined by [spec 002](../specs/002-home
 | Host | Windows 11 workstation, 24 GB RAM, 12 threads |
 | Runtime | Docker Desktop on WSL2, WSL memory capped at ~12 GB |
 | Cluster | k3d: 1 server + 2 agent nodes (k3s, CNCF-conformant Kubernetes) |
-| Budget | ≤ 10 GB RAM for the whole homelab in steady state |
+| Budget | ≤ 10 GB RAM for the whole production-replica lab in steady state |
 | Access | `localhost` only, TLS; no public domain, no inbound port from the Internet |
 
 The host must stay awake for overnight processing. When it was off, the 08:30 summary states the gap.

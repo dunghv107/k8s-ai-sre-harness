@@ -1,10 +1,14 @@
-# Harness-K8s-Homelab
+# k8s-ai-sre-harness
+
+**Kubernetes AI SRE Harness**
+
+[![CI](https://github.com/dunghv107/k8s-ai-sre-harness/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dunghv107/k8s-ai-sre-harness/actions/workflows/ci.yml)
 
 **[English](#english) · [Tiếng Việt](#tiếng-việt)**
 
-A production-like Kubernetes homelab running entirely in Docker on one workstation, plus an AI agent harness
+A production-replica Kubernetes lab (k3d) running entirely in Docker on one workstation, plus an AI agent harness
 that triages alerts in real time.
-Homelab Kubernetes mô phỏng production, chạy hoàn toàn trong Docker trên một máy, kèm một AI agent harness phân
+Lab Kubernetes mô phỏng production (k3d, quy mô nhỏ hơn), chạy hoàn toàn trong Docker trên một máy, kèm một AI agent harness phân
 loại cảnh báo theo thời gian thực.
 
 ```mermaid
@@ -57,16 +61,18 @@ flowchart LR
 
 ## English
 
-> **A scaled-down homelab of a real production setup.** Every flow here (GitOps delivery, CI security gates,
+> **A scaled-down production-replica lab of a real production setup.** Every flow here (GitOps delivery, CI security gates,
 > ingress, admission and network policy, observability, alert routing and chat-ops triage) mirrors the platform
-> I designed and operated in production at **DFM** across two Kubernetes clusters. The homelab runs the same
+> I designed and operated in production at **DFM** across two Kubernetes clusters. The lab runs the same
 > flows on one machine, with open-source substitutes where the production tool is too heavy for a laptop.
 > No company data, hostnames or credentials are included. The AI triage agent is the new part, built on top of
 > the alert pipeline that ran in production.
 
-> **Status:** the homelab and the full alert pipeline run today: four-language sample app with 100 % tracing,
-> metrics/logs/traces, a simple SIEM (API audit log + Falco) and Telegram alerts. The AI triage agent is specified
-> ([spec 001](specs/001-realtime-alert-triage/spec.md)) and comes next.
+> **Status:** running today: the production-replica lab, the full alert pipeline (four-language sample app with 100 % tracing,
+> metrics/logs/traces, a simple SIEM with API audit log + Falco, Telegram alerts) and the AI triage agent MVP
+> (receive, dedupe, transient-failure gate, read-only investigation, Telegram diagnosis). Not built yet: the later
+> phases listed in [spec 001](specs/001-realtime-alert-triage/spec.md) (dev message drafts, Telegram commands,
+> 08:30 summary).
 
 ### Run the demo
 
@@ -75,8 +81,12 @@ bash scripts/up.sh          # k3d cluster (1 server + 2 agents), audit log, Cili
 cp .env.example .env        # fill TELEGRAM_BOT_TOKEN and TELEGRAM_ALERT_CHAT_ID
 bash scripts/platform.sh    # Prometheus, Alertmanager → Telegram, Grafana, Loki, Tempo, Alloy, Falco, SIEM rules
 bash scripts/deploy-apps.sh # Postgres + shop-web (Next.js), orders-api (Node), catalog-api (Python), invoice-api (Go)
+bash scripts/deploy-agent.sh # builds the alert-agent image, creates its Secret from .env, deploys it to the alerting namespace
 kubectl -n shop port-forward svc/shop-web 3000:3000   # open http://localhost:3000, press "product 4" for a real 500
 ```
+
+What to expect in Telegram: the alert bot posts the raw alert for the
+500, and after the 60 s batching window the agent bot posts one diagnosis message (see below).
 
 Detection rules and how to trigger each one: [docs/siem.md](docs/siem.md). Service contract: [docs/contract.md](docs/contract.md).
 
@@ -88,9 +98,9 @@ On-call ends at 17:30. Alerts that fire overnight pile up until the next morning
 same 5xx error from one app. The goal is to arrive in the morning to a handful of incidents that are already
 diagnosed, with evidence, and with the message to developers ready to send.
 
-### Production at DFM → this homelab
+### Production at DFM → this lab
 
-| Flow | Production (DFM) | Homelab |
+| Flow | Production (DFM) | Lab |
 |---|---|---|
 | Clusters | 2 clusters (France, Vietnam), multi-node, kubeadm / RKE2 | 1 k3d cluster, 1 server + 2 agents |
 | Delivery | Tag-driven CI → image tag written to GitOps repo → Argo CD sync, shared Helm chart for every app | Same model: GitHub Actions → GitOps → Argo CD, shared chart |
@@ -103,21 +113,88 @@ diagnosed, with evidence, and with the message to developers ready to send.
 | Observability | Grafana, Prometheus, Loki, Tempo, Alloy, OpenTelemetry at 100 % sampling | Same stack, in-cluster |
 | Alerting | Webhook receiver → fingerprint dedupe → chat room with commands (`#id safe/done/real`), monthly incident table | Same flow on Telegram, **plus the AI agent** that diagnoses each incident |
 
-### What the agent does
+### AI alert agent
 
-| Situation | Behaviour |
+Spec: [specs/001-realtime-alert-triage](specs/001-realtime-alert-triage/spec.md) · design rules: [constitution](.specify/memory/constitution.md).
+
+**Two bots in one Telegram group.** The alert bot (driven by Alertmanager) posts the raw alert. The agent bot posts
+the diagnosis. Telegram bots cannot read other bots' messages, so the agent does not read the group: it receives the
+same alert through the Alertmanager webhook, which accepts traffic from inside the cluster only.
+
+**Journey of one alert**
+
+| Step | What happens |
 |---|---|
-| One alert fires | Opens an incident, one sub-agent reads logs + metrics for that window, posts a diagnosis (label: infra / app / unknown, confidence, evidence links) |
-| 10 alerts in 2 minutes | Groups by fingerprint and by project/time correlation, runs one sub-agent per incident in parallel, sends one message per incident |
-| Same alert keeps firing | Increments the counter silently; messages again only on severity change, recovery or re-open |
-| Looks like noise | Proposes closing with a reason; operator approves with one command. Patterns the operator marks *trusted* close automatically |
-| Security / audit / node / storage / certificate | Never auto-closed |
-| App (business) error | Drafts a message for the project's developers. Phase 1: operator forwards it. Phase 2: sent directly, per-project switch |
-| 08:30 on workdays | Summary of everything since 17:30 the previous workday |
+| 1 Store | Alert written to SQLite before answering Alertmanager, so a pod crash loses nothing |
+| 2 Dedupe | Fingerprint (rule + service + route); a repeat of an open incident only bumps a counter, no new message |
+| 3 Batch | New incident waits 60 s; same-project incidents within 120 s are handled together |
+| 4 Gate | Rollout in progress, pod younger than 3 min, already resolved, fewer than 3 errors in 2 min: held, **no model call** |
+| 5 Investigate | One sub-agent per incident, up to 5 in parallel, max 8 tool calls and 300 s each |
+| 6 Conclude | JSON with label, confidence, cause, evidence, next action; no evidence means "not enough evidence" |
+| 7 Send | Secrets redacted, message rendered, sent by the agent bot |
 
-Guard rails ([constitution](.specify/memory/constitution.md)): read-only credentials only, secrets redacted before
-anything reaches the model or Telegram, every conclusion cites evidence, daily cost cap, no inbound ports from the
-Internet.
+Security alerts (audit log, Falco) skip the gate, are never auto-closed and use the stronger model.
+
+**Read-only tools:** `list_pods`, `get_pod_logs`, `get_events`, `get_rollout`, `query_metrics` (Prometheus),
+`query_logs` (Loki), `search_traces` / `get_trace` (Tempo). Model: `gpt-6.1-terra`, escalated to `gpt-6.1-sol` for
+security incidents or low-confidence answers.
+
+**A real diagnosis.** Product 4 returns HTTP 500. The agent read the catalog-api pod log, followed the trace id into
+Tempo, found the root service and the code line. It posts in Vietnamese; translated here:
+
+```
+🧠 Diagnosis #2 · catalog-api · Http5xxRate
+🏷️ app · ongoing · confidence high
+🎯 catalog-api fails when querying product 4, so shop-web returns HTTP 500.
+🔎 IndexError when reading the first element of product["variants"] in price_of.
+📎 logs: main.py:57, price_of ... IndexError: list index out of range
+📎 trace: shop-web /api/products/4: 500; catalog-api ... ERROR
+➡️ Pass the trace and the error to the dev team to check product 4's variant data
+⏱️ 13:07 · 1 occurrence · gpt-6.1-terra · 0.029 USD
+```
+
+Four alerts (5xx and error logs from two services) produced one diagnosis, not four.
+
+**Safety**
+- Read-only RBAC: `get/list/watch` on pods, logs, events, deployments; no Secrets, no exec, no writes.
+- Redaction: tokens, passwords, keys, emails are replaced with `«redacted»` before the model and before Telegram.
+- Logs are data, not instructions (prompt-injection stance); a test plants a secret in logs and checks it never
+  reaches the OpenAI or Telegram request.
+- Egress limited to DNS, the API server, Prometheus/Loki/Tempo and HTTPS to OpenAI and Telegram.
+- Daily cost cap of 2 USD: over the cap, incidents are still reported but not analysed.
+
+**Measured cost** (on this production-replica lab, with `gpt-6.1-terra` / `gpt-6.1-sol`; token counts from the agent's own `runs`
+table): about **0.023 USD per pod-error diagnosis** with Terra (range 0.016 to 0.029, 6 to 8 tool calls, 13k to 25k
+input tokens) and about 0.009 USD for a security incident with Sol. At the 2 USD cap that is roughly 85 such
+diagnoses per day. Total agent spend during the build was about 0.09 USD. OpenAI cost only; details in the build log.
+
+**Not built yet** (spec 001, later phases): drafted messages for developers, Telegram commands (`/verify`, `/hold`,
+`/approve`, `/reopen`), the 08:30 workday summary. Known issue in the build log: two alert groups with the same
+correlation id can still produce two identical diagnoses.
+
+#### Native engine vs HolmesGPT
+
+Both engines ran on the same incidents with `AGENT_ENGINE=both` (13 incidents per engine, token-derived cost, not an invoice):
+native averaged 0.038 USD per diagnosis, HolmesGPT 0.115 USD (about 3x more). Native was right on 5xx code bugs but
+`unknown` on crash, OOM and NetworkPolicy; HolmesGPT was better on OOM and audit. HolmesGPT reads about 90-140k input
+tokens per run, native about 10-27k.
+
+The fix was context engineering, not a bigger model: before calling the model the agent builds a **context pack**
+(container state with last termination reason and limits, events, rollout, audit-log writes, NetworkPolicies, previous
+container log tail; about 1.5k tokens, redacted) plus decision rules and read-only RBAC for NetworkPolicies. No model
+was fine-tuned.
+
+| | Before context pack (`both`) | After context pack (`fallback`) |
+|---|---|---|
+| Incidents | 13 per engine | 10, one round per scenario |
+| Native correct | 5xx only; unknown on crash, OOM, NetworkPolicy | 10/10, high confidence |
+| HolmesGPT needed | n/a (benchmark) | 0 times |
+| Mean cost per diagnosis | native 0.038 USD, HolmesGPT 0.115 USD | **0.022 USD, about 5x cheaper than HolmesGPT** |
+| Mean input tokens | native about 10-27k, HolmesGPT about 90-140k | about 15k |
+| Time to verdict | 15-35 s | about 6-16 s |
+
+`AGENT_ENGINE=fallback` (default) asks native first and calls HolmesGPT once only when native returns `unknown` or low
+confidence. Small sample (one round per scenario), a lab and not DFM production.
 
 ### Repository layout
 
@@ -126,19 +203,23 @@ Internet.
 .claude/skills/        Spec Kit commands for the coding agent
 specs/
   001-realtime-alert-triage/   what the alert agent must do
-  002-homelab-platform/        what the homelab cluster must provide
+  002-homelab-platform/        what the lab cluster must provide
+agent/                 the alert agent (Python): webhook, dedupe, gate, sub-agents, read-only tools, tests
+deploy/
+  alerting/            agent manifests: namespace, read-only RBAC, Deployment, NetworkPolicies
 docs/
-  architecture.md      homelab and alert flow, component by component
+  architecture.md      lab and alert flow, component by component
   decisions.md         why k3d, Cilium, Falco, OpenAI, Telegram polling, ...
 .env.example           every setting the stack reads; copy to .env (never committed)
 ```
 
-Also: `platform/` (k3d, Cilium, observability, Falco), `apps/` (four sample services), `deploy/` (shared Helm chart,
-Postgres, NetworkPolicies), `scripts/` (up, platform, deploy-apps). Still to come: `agent/`, `.github/workflows/`.
+Also: `platform/` (k3d, Cilium, observability, Falco), `apps/` (four sample services), `deploy/` (also the shared Helm
+chart, Postgres, NetworkPolicies), `scripts/` (up, platform, deploy-apps, deploy-agent, demo). Still to come:
+`.github/workflows/`.
 
 ### Requirements
 
-- Windows 11 with Docker Desktop (WSL2), ~10 GB RAM free for the homelab
+- Windows 11 with Docker Desktop (WSL2), ~10 GB RAM free for the production-replica lab
 - A Telegram bot (create it with @BotFather) and an OpenAI API key; without them the agent runs in demo mode
 
 ### Spec-Driven workflow
@@ -155,16 +236,17 @@ uv tool install specify-cli --from "git+https://github.com/github/spec-kit.git@v
 
 ## Tiếng Việt
 
-> **Bản homelab thu nhỏ của một hệ thống production thật.** Mọi luồng ở đây (triển khai GitOps, các cổng bảo mật
+> **Lab mô phỏng thu nhỏ của một hệ thống production thật.** Mọi luồng ở đây (triển khai GitOps, các cổng bảo mật
 > trong CI, cửa vào, admission và network policy, giám sát, định tuyến cảnh báo và xử lý cảnh báo qua chat) giống
-> nền tảng tôi đã thiết kế và vận hành production tại **DFM** trên hai cụm Kubernetes. Homelab chạy cùng các luồng
+> nền tảng tôi đã thiết kế và vận hành production tại **DFM** trên hai cụm Kubernetes. Lab chạy cùng các luồng
 > đó trên một máy, dùng công cụ mã nguồn mở thay thế ở chỗ công cụ production quá nặng cho laptop. Repo không chứa
 > dữ liệu, tên máy chủ hay thông tin đăng nhập của công ty. Agent AI phân loại cảnh báo là phần mới, xây trên luồng
 > cảnh báo đã chạy production.
 
-> **Trạng thái:** homelab và toàn bộ luồng cảnh báo đã chạy: app mẫu bốn ngôn ngữ với trace 100 %, số liệu/log/trace,
-> SIEM đơn giản (audit log API + Falco) và cảnh báo về Telegram. Agent AI phân loại cảnh báo đã có đặc tả
-> ([spec 001](specs/001-realtime-alert-triage/spec.md)) và là bước tiếp theo.
+> **Trạng thái:** đang chạy: lab mô phỏng production, toàn bộ luồng cảnh báo (app mẫu bốn ngôn ngữ với trace 100 %, số liệu/log/trace,
+> SIEM đơn giản gồm audit log API + Falco, cảnh báo về Telegram) và bản MVP của agent AI phân loại cảnh báo (nhận,
+> gộp trùng, cửa lọc lỗi tự hết, điều tra chỉ đọc, chẩn đoán về Telegram). Chưa làm: các giai đoạn sau trong
+> [spec 001](specs/001-realtime-alert-triage/spec.md) (tin soạn sẵn cho dev, lệnh Telegram, tóm tắt 08:30).
 
 ### Chạy demo
 
@@ -173,8 +255,12 @@ bash scripts/up.sh          # cụm k3d (1 server + 2 agent), audit log, Cilium 
 cp .env.example .env        # điền TELEGRAM_BOT_TOKEN và TELEGRAM_ALERT_CHAT_ID
 bash scripts/platform.sh    # Prometheus, Alertmanager → Telegram, Grafana, Loki, Tempo, Alloy, Falco, luật SIEM
 bash scripts/deploy-apps.sh # Postgres + shop-web (Next.js), orders-api (Node), catalog-api (Python), invoice-api (Go)
+bash scripts/deploy-agent.sh # build image alert-agent, tạo Secret từ .env, triển khai vào namespace alerting
 kubectl -n shop port-forward svc/shop-web 3000:3000   # mở http://localhost:3000, bấm "product 4" để có lỗi 500 thật
 ```
+
+Kết quả mong đợi trên Telegram: bot cảnh báo gửi tin cảnh báo gốc cho lỗi
+500, sau cửa sổ gom 60 giây bot agent gửi một tin chẩn đoán (xem bên dưới).
 
 Luật phát hiện và cách kích hoạt từng luật: [docs/siem.md](docs/siem.md). Chuẩn giao tiếp giữa các dịch vụ: [docs/contract.md](docs/contract.md).
 
@@ -186,9 +272,9 @@ Ca trực kết thúc lúc 17:30. Cảnh báo bắn ban đêm dồn tới sáng 
 lỗi 5xx của một app. Mục tiêu: sáng đến chỉ còn vài sự cố, đã được chẩn đoán, có bằng chứng, và tin nhắn cho dev đã
 soạn sẵn.
 
-### Production tại DFM → homelab này
+### Production tại DFM → lab này
 
-| Luồng | Production (DFM) | Homelab |
+| Luồng | Production (DFM) | Lab |
 |---|---|---|
 | Cụm | 2 cụm (Pháp, Việt Nam), nhiều node, kubeadm / RKE2 | 1 cụm k3d, 1 server + 2 agent |
 | Triển khai | CI theo tag → ghi image tag vào repo GitOps → Argo CD đồng bộ, một Helm chart dùng chung cho mọi app | Cùng mô hình: GitHub Actions → GitOps → Argo CD, chart dùng chung |
@@ -201,21 +287,88 @@ soạn sẵn.
 | Giám sát | Grafana, Prometheus, Loki, Tempo, Alloy, OpenTelemetry lấy mẫu 100 % | Cùng bộ, chạy trong cụm |
 | Cảnh báo | Bộ nhận webhook → gộp theo dấu vân tay → phòng chat có lệnh (`#id safe/done/real`), bảng sự cố theo tháng | Cùng luồng trên Telegram, **thêm agent AI** chẩn đoán từng sự cố |
 
-### Agent làm gì
+### Agent AI phân loại cảnh báo
 
-| Tình huống | Hành vi |
+Spec: [specs/001-realtime-alert-triage](specs/001-realtime-alert-triage/spec.md) · nguyên tắc thiết kế: [constitution](.specify/memory/constitution.md).
+
+**Hai bot trong một nhóm Telegram.** Bot cảnh báo (do Alertmanager điều khiển) gửi tin cảnh báo gốc. Bot agent gửi
+tin chẩn đoán. Telegram không cho bot đọc tin của bot khác, nên agent không đọc tin trong nhóm: nó nhận cùng cảnh báo
+đó qua webhook của Alertmanager, webhook chỉ nhận kết nối từ bên trong cụm.
+
+**Hành trình của một cảnh báo**
+
+| Bước | Việc |
 |---|---|
-| Một cảnh báo bắn | Mở sự cố, một sub-agent đọc log + số liệu trong khoảng thời gian đó, đăng chẩn đoán (nhãn: hạ tầng / nghiệp vụ / chưa rõ, mức tin cậy, link bằng chứng) |
-| 10 cảnh báo trong 2 phút | Gộp theo dấu vân tay và theo dự án/thời gian, mỗi sự cố một sub-agent chạy song song, mỗi sự cố một tin |
-| Một cảnh báo bắn mãi | Chỉ tăng bộ đếm, chỉ nhắn lại khi đổi mức nghiêm trọng, hồi phục hoặc mở lại |
-| Trông như nhiễu | Đề xuất đóng kèm lý do; người vận hành duyệt bằng một lệnh. Mẫu đã đánh dấu *tin cậy* thì tự đóng |
-| Bảo mật / audit / node / lưu trữ / chứng chỉ | Không bao giờ tự đóng |
-| Lỗi nghiệp vụ của app | Soạn tin cho dev dự án. Giai đoạn 1: người vận hành tự chuyển. Giai đoạn 2: gửi thẳng, bật theo từng dự án |
-| 08:30 ngày làm việc | Tóm tắt mọi thứ từ 17:30 ngày làm việc trước |
+| 1 Lưu | Ghi cảnh báo vào SQLite trước khi trả lời Alertmanager, pod chết giữa chừng cũng không mất |
+| 2 Gộp | Dấu vân tay (luật + dịch vụ + route); lặp lại sự cố đang mở chỉ tăng bộ đếm, không gửi thêm tin |
+| 3 Chờ gom | Sự cố mới chờ 60 giây; sự cố cùng dự án trong 120 giây được xử lý chung |
+| 4 Cửa lọc | Đang rollout, pod dưới 3 phút, đã tự hết, dưới 3 lỗi trong 2 phút: giữ lại, **không gọi model** |
+| 5 Điều tra | Mỗi sự cố một sub-agent, tối đa 5 cái song song, mỗi cái tối đa 8 lần gọi công cụ và 300 giây |
+| 6 Kết luận | JSON gồm nhãn, mức tin cậy, nguyên nhân, bằng chứng, việc nên làm; không có bằng chứng thì nói "chưa đủ bằng chứng" |
+| 7 Gửi tin | Che bí mật, dựng tin tiếng Việt, gửi bằng bot agent |
 
-Hàng rào an toàn ([constitution](.specify/memory/constitution.md)): chỉ dùng thông tin xác thực chỉ đọc, che bí mật
-trước khi gửi cho mô hình hay Telegram, mọi kết luận kèm bằng chứng, có trần chi phí theo ngày, không mở cổng nào
-nhận kết nối từ Internet.
+Cảnh báo bảo mật (audit log, Falco) bỏ qua cửa lọc, không bao giờ tự đóng và dùng model mạnh hơn.
+
+**Công cụ chỉ đọc:** `list_pods`, `get_pod_logs`, `get_events`, `get_rollout`, `query_metrics` (Prometheus),
+`query_logs` (Loki), `search_traces` / `get_trace` (Tempo). Model: `gpt-6.1-terra`, nâng lên `gpt-6.1-sol` khi là sự
+cố bảo mật hoặc khi câu trả lời kém chắc chắn.
+
+**Một chẩn đoán thật.** Sản phẩm 4 trả HTTP 500. Agent đọc log pod catalog-api, lần theo trace id sang Tempo, tìm ra
+dịch vụ gốc và dòng code:
+
+```
+🧠 Chẩn đoán #2 · catalog-api · Http5xxRate
+🏷️ app · ongoing · tin cậy high
+🎯 catalog-api lỗi khi truy vấn sản phẩm 4, khiến shop-web trả HTTP 500.
+🔎 IndexError khi truy cập phần tử đầu của product["variants"] trong hàm price_of.
+📎 logs: main.py:57, price_of … IndexError: list index out of range
+📎 trace: shop-web /api/products/4: 500; catalog-api … ERROR
+➡️ Chuyển trace và lỗi cho nhóm phát triển kiểm tra dữ liệu biến thể của sản phẩm 4
+⏱️ 13:07 · 1 lần · gpt-6.1-terra · 0,029 USD
+```
+
+Bốn cảnh báo (5xx và log lỗi của hai dịch vụ) được trả lời bằng một chẩn đoán, không phải bốn.
+
+**An toàn**
+- RBAC chỉ đọc: `get/list/watch` pod, log, event, deployment; không đọc Secret, không exec, không ghi.
+- Che bí mật: token, mật khẩu, key, email bị thay bằng `«redacted»` trước khi gửi model và trước khi lên Telegram.
+- Log là dữ liệu, không phải lệnh (chống prompt injection); có test cài sẵn bí mật trong log và kiểm tra nó không lọt
+  vào request gửi OpenAI hay Telegram.
+- Đi ra chỉ tới DNS, API server, Prometheus/Loki/Tempo và HTTPS tới OpenAI, Telegram.
+- Trần chi phí 2 USD/ngày: quá trần vẫn báo sự cố nhưng không phân tích.
+
+**Chi phí đo thật** (trên lab mô phỏng production này, với `gpt-6.1-terra` / `gpt-6.1-sol`; số token lấy từ bảng `runs` của agent):
+khoảng **0,023 USD cho một lần chẩn đoán lỗi pod** bằng Terra (từ 0,016 đến 0,029; 6–8 lần gọi công cụ, 13–25 nghìn
+token vào) và khoảng 0,009 USD cho một sự cố bảo mật bằng Sol. Với trần 2 USD/ngày là khoảng 85 lần chẩn đoán như
+vậy mỗi ngày. Tổng chi phí agent trong lúc xây dựng khoảng 0,09 USD. Chỉ tính OpenAI; chi tiết trong nhật ký.
+
+**Chưa làm** (spec 001, các giai đoạn sau): tin soạn sẵn cho dev, lệnh Telegram (`/verify`, `/hold`, `/approve`,
+`/reopen`), tóm tắt 08:30 ngày làm việc. Lỗi đã biết trong nhật ký: hai nhóm cảnh báo cùng correlation id vẫn có thể
+ra hai chẩn đoán giống nhau.
+
+#### So sánh với HolmesGPT
+
+Hai engine chạy trên cùng sự cố với `AGENT_ENGINE=both` (13 sự cố mỗi engine, chi phí tính từ token, không phải hoá đơn):
+native trung bình 0.038 USD một lần chẩn đoán, HolmesGPT 0.115 USD (đắt gấp khoảng 3 lần). Native đúng ở lỗi code 5xx
+nhưng `unknown` ở crash, OOM và NetworkPolicy; HolmesGPT tốt hơn ở OOM và audit. HolmesGPT đọc khoảng 90-140k token
+đầu vào mỗi lần, native khoảng 10-27k.
+
+Cách sửa là context engineering chứ không phải đổi model lớn hơn: trước khi gọi model, agent dựng **gói ngữ cảnh**
+(trạng thái container kèm lý do kết thúc lần trước và limit, event, rollout, ghi audit log, NetworkPolicy, đuôi log của
+container trước; khoảng 1.5k token, đã che bí mật), thêm quy tắc quyết định và quyền chỉ-đọc NetworkPolicy. Không
+fine-tune model.
+
+| | Trước gói ngữ cảnh (`both`) | Sau gói ngữ cảnh (`fallback`) |
+|---|---|---|
+| Số sự cố | 13 mỗi engine | 10, một vòng mỗi kịch bản |
+| Native đúng | chỉ 5xx; `unknown` ở crash, OOM, NetworkPolicy | 10/10, tin cậy cao |
+| Cần gọi HolmesGPT | không áp dụng (benchmark) | 0 lần |
+| Chi phí TB một lần chẩn đoán | native 0.038 USD, HolmesGPT 0.115 USD | **0.022 USD, rẻ hơn HolmesGPT khoảng 5 lần** |
+| Token đầu vào TB | native khoảng 10-27k, HolmesGPT khoảng 90-140k | khoảng 15k |
+| Thời gian tới chẩn đoán | 15-35 s | khoảng 6-16 s |
+
+`AGENT_ENGINE=fallback` (mặc định) hỏi native trước, chỉ gọi HolmesGPT một lần khi native trả `unknown` hoặc độ tin cậy
+thấp. Mẫu nhỏ (một vòng mỗi kịch bản), chạy trên lab mô phỏng chứ không phải production DFM.
 
 ### Cấu trúc repo
 
@@ -224,19 +377,23 @@ nhận kết nối từ Internet.
 .claude/skills/        lệnh Spec Kit cho coding agent
 specs/
   001-realtime-alert-triage/   agent cảnh báo phải làm gì
-  002-homelab-platform/        cụm homelab phải có gì
+  002-homelab-platform/        cụm lab phải có gì
+agent/                 agent cảnh báo (Python): webhook, gộp trùng, cửa lọc, sub-agent, công cụ chỉ đọc, test
+deploy/
+  alerting/            manifest của agent: namespace, RBAC chỉ đọc, Deployment, NetworkPolicy
 docs/
-  architecture.md      homelab và luồng cảnh báo, từng thành phần
+  architecture.md      lab và luồng cảnh báo, từng thành phần
   decisions.md         vì sao chọn k3d, Cilium, Falco, OpenAI, Telegram polling, ...
 .env.example           mọi biến cấu hình; chép sang .env (không bao giờ commit)
 ```
 
-Ngoài ra: `platform/` (k3d, Cilium, giám sát, Falco), `apps/` (bốn dịch vụ mẫu), `deploy/` (Helm chart dùng chung,
-Postgres, NetworkPolicy), `scripts/` (up, platform, deploy-apps). Sắp làm: `agent/`, `.github/workflows/`.
+Ngoài ra: `platform/` (k3d, Cilium, giám sát, Falco), `apps/` (bốn dịch vụ mẫu), `deploy/` (còn có Helm chart dùng
+chung, Postgres, NetworkPolicy), `scripts/` (up, platform, deploy-apps, deploy-agent, demo). Sắp làm:
+`.github/workflows/`.
 
 ### Yêu cầu
 
-- Windows 11 có Docker Desktop (WSL2), còn trống khoảng 10 GB RAM cho homelab
+- Windows 11 có Docker Desktop (WSL2), còn trống khoảng 10 GB RAM cho lab mô phỏng production
 - Một Telegram bot (tạo bằng @BotFather) và OpenAI API key; thiếu thì agent chạy chế độ demo
 
 ### Quy trình Spec-Driven

@@ -1,0 +1,52 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: alert-agent
+  namespace: alerting
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: alert-agent
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # Only Alertmanager posts webhooks.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+      ports:
+        - {protocol: TCP, port: 8080}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    # API server access lives in cilium-apiserver.yaml: CIDR rules do not match nodes under Cilium.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+      ports:
+        - {protocol: TCP, port: 9090}
+        - {protocol: TCP, port: 3100}
+        - {protocol: TCP, port: 3200}
+    # HolmesGPT engine (AGENT_ENGINE=holmes|both).
+    - to:
+        - podSelector:
+            matchLabels:
+              app: holmes
+      ports:
+        - {protocol: TCP, port: 5050}
+    # OpenAI and Telegram over HTTPS; private ranges stay closed.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+      ports:
+        - {protocol: TCP, port: 443}

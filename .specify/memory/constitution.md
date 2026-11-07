@@ -1,4 +1,4 @@
-# Harness-K8s-Homelab Constitution
+# k8s-ai-sre-harness Constitution
 
 ## Core Principles
 
@@ -36,7 +36,7 @@ phép biến thành thay đổi trên hạ tầng.
   trước khi đưa vào mô hình, bảng tóm tắt hay tin nhắn.
 - Thông tin xác thực của agent MUST đến từ kho bí mật (Vault + External Secrets hoặc
   SealedSecrets); trong repo chỉ có placeholder. Không in giá trị bí mật ra log hay output.
-- Dữ liệu log gửi ra ngoài homelab chỉ được phép theo đúng phạm vi đã chốt trong spec.
+- Dữ liệu log gửi ra ngoài lab mô phỏng production chỉ được phép theo đúng phạm vi đã chốt trong spec.
 
 ### V. Gộp trước, phân tích sau (Dedupe Before Analysis)
 

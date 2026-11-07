@@ -1,0 +1,32 @@
+{
+  "version": "4",
+  "groupKey": "{}:{alertname=\"Http5xxRate\"}",
+  "truncatedAlerts": 0,
+  "status": "resolved",
+  "receiver": "alert-agent",
+  "groupLabels": {"alertname": "Http5xxRate"},
+  "commonLabels": {"alertname": "Http5xxRate", "namespace": "shop", "protected": "false", "service": "catalog-api", "severity": "critical", "source": "prometheus"},
+  "commonAnnotations": {"summary": "5xx responses from catalog-api on /api/products/{product_id} (0.35/s)"},
+  "externalURL": "http://kps-alertmanager.observability:9093",
+  "alerts": [
+    {
+      "status": "resolved",
+      "labels": {
+        "alertname": "Http5xxRate",
+        "http_route": "/api/products/{product_id}",
+        "namespace": "shop",
+        "protected": "false",
+        "service": "catalog-api",
+        "service_name": "catalog-api",
+        "service_namespace": "shop",
+        "severity": "critical",
+        "source": "prometheus"
+      },
+      "annotations": {"summary": "5xx responses from catalog-api on /api/products/{product_id} (0.35/s)"},
+      "startsAt": "2026-11-07T01:12:30.000Z",
+      "endsAt": "2026-11-07T01:19:30.000Z",
+      "generatorURL": "http://kps-prometheus.observability:9090/graph?g0.expr=sum+by+%28service_name%29+%28rate%28traces_span_metrics_calls_total%29%29+%3E+0&g0.tab=1",
+      "fingerprint": "3f6b1c9a52d7e480"
+    }
+  ]
+}

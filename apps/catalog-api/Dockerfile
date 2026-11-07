@@ -5,6 +5,8 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 FROM python:3.13.18-slim-bookworm
 COPY --from=build /install /usr/local
+# pip vendors msgpack/urllib3 copies with open CVEs and is not needed at runtime
+RUN pip uninstall -y pip
 WORKDIR /srv
 COPY app ./app
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \

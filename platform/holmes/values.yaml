@@ -1,0 +1,63 @@
+# HolmesGPT as a second investigation engine for the alert agent (chart robusta/holmes, version pinned in scripts/deploy-holmes.sh).
+# Secrets (OPENAI_API_KEY, HOLMES_API_KEY, GRAFANA_API_KEY) come from Secret holmes-secrets, never from this file.
+
+# Same model as the native engine, for a fair comparison.
+modelList:
+  terra:
+    model: openai/gpt-6.1-terra
+    api_key: "{{ env.OPENAI_API_KEY }}"
+    temperature: 0
+    # Not in litellm's price map; same USD per token as PRICES in agent/src/alert_agent/config.py, so Holmes reports a usable cost.
+    input_cost_per_token: 0.000001
+    output_cost_per_token: 0.000005
+
+extraEnvVarsSecrets: [holmes-secrets]
+
+# Reuse the read-only Role alert-agent-read in namespace shop; the chart creates no RBAC of its own.
+createServiceAccount: false
+customServiceAccountName: alert-agent
+k8sRBAC: false
+
+# Everything that can reach outside the production-replica lab, or run commands, is off.
+toolsets:
+  kubernetes/core: {enabled: true}
+  kubernetes/logs: {enabled: true}
+  prometheus/metrics:
+    enabled: true
+    config:
+      prometheus_url: http://kps-prometheus.observability.svc:9090
+  grafana/loki:
+    enabled: true
+    config:
+      api_url: http://kps-grafana.observability.svc
+      api_key: "{{ env.GRAFANA_API_KEY }}"
+      grafana_datasource_uid: loki
+  grafana/tempo:
+    enabled: true
+    config:
+      api_url: http://tempo.observability.svc:3200
+  robusta: {enabled: false}
+  internet: {enabled: false}
+  skills: {enabled: false}
+  connectivity_check: {enabled: false}
+  bash: {enabled: false}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile: {type: RuntimeDefault}
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities: {drop: [ALL]}
+
+resources:
+  requests: {cpu: 100m, memory: 1Gi}
+  limits: {memory: 2Gi}
+
+# No telemetry to Robusta.
+enableTelemetry: false
+# The Role lives in namespace shop only: tell Holmes so it does not probe cluster-wide access first.
+additionalEnvVars:
+  - {name: SCOPED_NAMESPACES, value: shop}

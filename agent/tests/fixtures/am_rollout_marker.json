@@ -1,0 +1,30 @@
+{
+  "version": "4",
+  "groupKey": "{}:{alertname=\"ServiceRollingOut\"}",
+  "truncatedAlerts": 0,
+  "status": "firing",
+  "receiver": "alert-agent",
+  "groupLabels": {"alertname": "ServiceRollingOut"},
+  "commonLabels": {"alertname": "ServiceRollingOut", "deployment": "catalog-api", "namespace": "shop", "protected": "false", "service": "catalog-api", "severity": "none", "source": "prometheus"},
+  "commonAnnotations": {"summary": "Deployment shop/catalog-api is rolling out"},
+  "externalURL": "http://kps-alertmanager.observability:9093",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "ServiceRollingOut",
+        "deployment": "catalog-api",
+        "namespace": "shop",
+        "protected": "false",
+        "service": "catalog-api",
+        "severity": "none",
+        "source": "prometheus"
+      },
+      "annotations": {"summary": "Deployment shop/catalog-api is rolling out"},
+      "startsAt": "2026-11-07T01:10:00.000Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://kps-prometheus.observability:9090/graph?g0.expr=max+by+%28namespace%2C+deployment%29+%28kube_deployment_status_observed_generation%29&g0.tab=1",
+      "fingerprint": "c52e7a90d1b46f38"
+    }
+  ]
+}

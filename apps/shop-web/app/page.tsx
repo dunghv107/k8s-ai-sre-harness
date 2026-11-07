@@ -39,7 +39,7 @@ export default function Home() {
 
   return (
     <main className={styles.main}>
-      <h1>Homelab shop</h1>
+      <h1>Demo shop</h1>
       <p className={styles.hint}>Each button calls a Next route handler that proxies to the backends.</p>
       <div className={styles.buttons}>
         {actions.map((a) => (

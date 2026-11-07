@@ -32,8 +32,8 @@
 ## Notes
 
 - 2026-11-06: viết lại từ "phân tích theo lô ban đêm" sang "xử lý ngay khi nhận cảnh báo" theo yêu cầu người
-  vận hành; kênh Talk → Telegram; môi trường là homelab, không phải hệ thống công ty cũ.
+  vận hành; kênh Talk → Telegram; môi trường là lab mô phỏng production, không phải hệ thống công ty cũ.
 - Đã chốt: tin cho dev giai đoạn 1 chỉ soạn, giai đoạn 2 gửi thẳng theo dự án; đóng spam cần duyệt, trừ
   mẫu nhiễu được đánh dấu tin cậy; log đã che được gửi lên OpenAI API (đổi từ Claude API ngày 2026-11-06).
 - Tên Telegram, Grafana, OpenAI API giữ lại vì là lựa chọn người vận hành đã đưa ra, không phải chi tiết thiết kế.
-- Nền tảng homelab (cụm, giám sát, nguồn cảnh báo) là phụ thuộc, sẽ có spec riêng.
+- Nền tảng lab mô phỏng production (cụm, giám sát, nguồn cảnh báo) là phụ thuộc, sẽ có spec riêng.

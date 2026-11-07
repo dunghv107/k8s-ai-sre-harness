@@ -1,11 +1,11 @@
 # Design decisions
 
-Short records of the choices behind the homelab and the alert agent. Each one states the context, the
+Short records of the choices behind the production-replica lab and the alert agent. Each one states the context, the
 decision and what was given up.
 
 ## D-01 · Local k3d instead of AKS
 
-- **Context:** the homelab must behave like a production cluster (RBAC, NetworkPolicy, audit log, CNI choice)
+- **Context:** the production-replica lab must behave like a production cluster (RBAC, NetworkPolicy, audit log, CNI choice)
   and stay free to run.
 - **Decision:** k3s in Docker via k3d, 1 server + 2 agents, on the workstation.
 - **Trade-off:** no managed control plane, no real cloud load balancer, host must stay awake at night.
@@ -44,12 +44,12 @@ decision and what was given up.
 - **Context:** the operator holds an OpenAI API key.
 - **Decision:** sub-agents call the OpenAI API. Only redacted log snippets needed for the diagnosis are sent,
   never whole log files.
-- **Trade-off:** data leaves the homelab (redacted). A local model would avoid that but needs GPU/RAM the
+- **Trade-off:** data leaves the production-replica lab (redacted). A local model would avoid that but needs GPU/RAM the
   host does not have.
 
 ## D-07 · Telegram with long polling
 
-- **Context:** the operator wants alerts and commands on the phone; the homelab has no public endpoint.
+- **Context:** the operator wants alerts and commands on the phone; the production-replica lab has no public endpoint.
 - **Decision:** a Telegram bot using long polling (outbound HTTPS only). Commands accepted only from
   allow-listed user IDs.
 - **Trade-off:** a few seconds of command latency compared with webhooks; no port opened to the Internet.
