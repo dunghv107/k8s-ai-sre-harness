@@ -7,8 +7,9 @@ tempo:
         grpc: {endpoint: 0.0.0.0:4317}
         http: {endpoint: 0.0.0.0:4318}
   resources:
-    requests: {cpu: 50m, memory: 128Mi}
-    limits: {memory: 256Mi}
+    requests: {cpu: 50m, memory: 256Mi}
+    # 256Mi OOMKilled under 100 % sampling of four services.
+    limits: {memory: 640Mi}
 # shortcut: local storage on emptyDir, traces vanish with the pod; enable persistence for history.
 persistence:
   enabled: false

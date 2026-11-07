@@ -5,6 +5,11 @@ metadata:
 servers: 1
 agents: 2
 image: rancher/k3s:v1.35.5-k3s1
+# A fixed loopback endpoint survives host IP changes; host.docker.internal goes stale on Windows.
+kubeAPI:
+  host: 127.0.0.1
+  hostIP: 127.0.0.1
+  hostPort: "6550"
 ports:
   - port: 127.0.0.1:8443:443
     nodeFilters: [loadbalancer]

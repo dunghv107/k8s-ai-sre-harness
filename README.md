@@ -80,6 +80,8 @@ kubectl -n shop port-forward svc/shop-web 3000:3000   # open http://localhost:30
 
 Detection rules and how to trigger each one: [docs/siem.md](docs/siem.md). Service contract: [docs/contract.md](docs/contract.md).
 
+Demo walkthrough: [docs/demo.md](docs/demo.md).
+
 ### Why
 
 On-call ends at 17:30. Alerts that fire overnight pile up until the next morning: out of 100 alerts, ~80 are the
@@ -175,6 +177,8 @@ kubectl -n shop port-forward svc/shop-web 3000:3000   # mở http://localhost:30
 ```
 
 Luật phát hiện và cách kích hoạt từng luật: [docs/siem.md](docs/siem.md). Chuẩn giao tiếp giữa các dịch vụ: [docs/contract.md](docs/contract.md).
+
+Kịch bản demo: [docs/demo.md](docs/demo.md).
 
 ### Vì sao
 

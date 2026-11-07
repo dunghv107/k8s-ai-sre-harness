@@ -85,6 +85,7 @@ helm upgrade --install kps prometheus-community/kube-prometheus-stack --version 
   --wait --timeout 10m
 
 kubectl apply -f platform/observability/rules/
+kubectl apply -f platform/observability/dashboards/
 
 helm upgrade --install loki grafana/loki --version "$LOKI_CHART" \
   --namespace "$OBS" --values platform/observability/loki.yaml --wait --timeout 10m

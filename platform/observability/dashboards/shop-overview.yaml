@@ -1,0 +1,40 @@
+# Grafana dashboard picked up by the kps-grafana sidecar (label grafana_dashboard).
+# The Loki datasource derived field TraceID (kube-prometheus-stack.yaml) links log lines to Tempo.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shop-overview-dashboard
+  namespace: observability
+  labels:
+    grafana_dashboard: "1"
+data:
+  shop-overview.json: |
+    {
+     "uid":"shop-overview","title":"Shop overview","schemaVersion":39,"version":1,"editable":true,"tags":["shop"],
+     "time":{"from":"now-1h","to":"now"},"refresh":"30s",
+     "templating":{"list":[{"name":"service","label":"service","type":"query","datasource":{"type":"prometheus","uid":"prometheus"},
+      "query":{"query":"label_values(traces_span_metrics_calls_total{span_kind=\"SPAN_KIND_SERVER\"}, service_name)","refId":"v"},
+      "refresh":2,"multi":true,"includeAll":true,"current":{"text":"All","value":"$__all"}}]},
+     "panels":[
+     {"id":1,"type":"timeseries","title":"Request rate per service","gridPos":{"x":0,"y":0,"w":12,"h":8},"datasource":{"type":"prometheus","uid":"prometheus"},
+      "fieldConfig":{"defaults":{"unit":"reqps"},"overrides":[]},
+      "targets":[{"refId":"A","expr":"sum by (service_name) (rate(traces_span_metrics_calls_total{span_kind=\"SPAN_KIND_SERVER\",service_name=~\"$service\"}[5m]))","legendFormat":"{{service_name}}"}]},
+     {"id":2,"type":"timeseries","title":"Error rate (5xx) per service and route","gridPos":{"x":12,"y":0,"w":12,"h":8},"datasource":{"type":"prometheus","uid":"prometheus"},
+      "fieldConfig":{"defaults":{"unit":"reqps"},"overrides":[]},
+      "targets":[{"refId":"A","expr":"sum by (service_name, http_route) (rate(traces_span_metrics_calls_total{span_kind=\"SPAN_KIND_SERVER\",status_code=\"STATUS_CODE_ERROR\",service_name=~\"$service\"}[5m]))","legendFormat":"{{service_name}} {{http_route}}"}]},
+     {"id":3,"type":"timeseries","title":"p95 latency per service","gridPos":{"x":0,"y":8,"w":12,"h":8},"datasource":{"type":"prometheus","uid":"prometheus"},
+      "fieldConfig":{"defaults":{"unit":"ms"},"overrides":[]},
+      "targets":[{"refId":"A","expr":"histogram_quantile(0.95, sum by (le, service_name) (rate(traces_span_metrics_duration_milliseconds_bucket{span_kind=\"SPAN_KIND_SERVER\",service_name=~\"$service\"}[5m])))","legendFormat":"{{service_name}}"}]},
+     {"id":4,"type":"timeseries","title":"Pod restarts and OOMKilled (namespace shop)","gridPos":{"x":12,"y":8,"w":12,"h":8},"datasource":{"type":"prometheus","uid":"prometheus"},
+      "fieldConfig":{"defaults":{"unit":"short"},"overrides":[]},
+      "targets":[{"refId":"A","expr":"sum by (pod) (increase(kube_pod_container_status_restarts_total{namespace=\"shop\"}[5m]))","legendFormat":"restarts {{pod}}"},
+       {"refId":"B","expr":"sum by (pod) (kube_pod_container_status_last_terminated_reason{namespace=\"shop\",reason=\"OOMKilled\"})","legendFormat":"OOMKilled {{pod}}"}]},
+     {"id":5,"type":"timeseries","title":"Hubble drops by reason and protocol","gridPos":{"x":0,"y":16,"w":12,"h":8},"datasource":{"type":"prometheus","uid":"prometheus"},
+      "fieldConfig":{"defaults":{"unit":"pps"},"overrides":[]},
+      "targets":[{"refId":"A","expr":"sum by (reason, protocol) (rate(hubble_drop_total[5m]))","legendFormat":"{{reason}} {{protocol}}"}]},
+     {"id":7,"type":"alertlist","title":"Firing alerts","gridPos":{"x":12,"y":16,"w":12,"h":8},
+      "options":{"alertInstanceLabelFilter":"","alertName":"","dashboardAlerts":false,"datasource":"Alertmanager","groupBy":[],"groupMode":"default","maxItems":20,"sortOrder":1,"stateFilter":{"firing":true,"pending":false,"noData":false,"normal":false,"error":false},"viewMode":"list"}},
+     {"id":6,"type":"logs","title":"Error logs (namespace shop), click a line to open its trace","gridPos":{"x":0,"y":24,"w":24,"h":10},"datasource":{"type":"loki","uid":"loki"},
+      "options":{"showTime":true,"wrapLogMessage":true,"enableLogDetails":true,"sortOrder":"Descending","dedupStrategy":"none"},
+      "targets":[{"refId":"A","expr":"{namespace=\"shop\"} | json | level=~\"error|ERROR\"","queryType":"range"}]}
+     ]}

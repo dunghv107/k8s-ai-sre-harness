@@ -125,6 +125,11 @@ alloy:
 
       loki.process "pods" {
         forward_to = [loki.write.default.receiver]
+        // Alertmanager logs the full Telegram URL on send errors; the bot token must not reach Loki.
+        stage.replace {
+          expression = "api\\.telegram\\.org/bot([0-9]+:[A-Za-z0-9_-]+)"
+          replace    = "<redacted>"
+        }
         stage.json {
           expressions = { level = "level", trace_id = "trace_id" }
         }

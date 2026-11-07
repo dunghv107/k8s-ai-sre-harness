@@ -181,6 +181,8 @@ Port-forward first (see the end of `scripts/platform.sh` output). Alerts show up
 Grafana: `kubectl -n observability port-forward svc/kps-grafana 3001:80`, user `admin`, password from
 `GRAFANA_ADMIN_PASSWORD` in `.env` (or the generated `grafana-admin` Secret).
 
+The "Shop overview" dashboard (uid `shop-overview`, `platform/observability/dashboards/`) is loaded by the Grafana sidecar and links error logs to Tempo traces.
+
 Viewer service account for the agent (read-only, created once by an admin):
 
 ```bash

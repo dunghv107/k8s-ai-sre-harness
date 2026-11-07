@@ -25,12 +25,12 @@ spec:
             summary: "5xx responses from {{ $labels.service_name }} on {{ $labels.http_route }} ({{ $value | humanize }}/s)"
         - alert: ServiceRollingOut
           # Silent marker (routed to the null receiver): inhibits noisy alerts while a Deployment rolls out, plus 2m of grace.
+          # No "replicas unavailable" clause: a crash-looping pod is unavailable too, and would mute PodRestartingFrequently for good.
           expr: |
             max by (namespace, deployment) (
               max_over_time((
                 (kube_deployment_status_observed_generation{namespace="shop"} != kube_deployment_metadata_generation{namespace="shop"})
                 or (kube_deployment_status_replicas_updated{namespace="shop"} < kube_deployment_spec_replicas{namespace="shop"})
-                or (kube_deployment_status_replicas_unavailable{namespace="shop"} > 0)
               )[2m:15s])
             )
           for: 0m

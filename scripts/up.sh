@@ -19,6 +19,8 @@ if ! k3d cluster list -o json | grep -q "\"name\":\"$CLUSTER\""; then
   host_dir=$(cd platform/k3d && (pwd -W 2>/dev/null || pwd))
   k3d cluster create --config platform/k3d/cluster.yaml \
     --volume "$host_dir/audit-policy.yaml:/etc/homelab/audit-policy.yaml@server:*"
+else
+  k3d cluster start "$CLUSTER" >/dev/null
 fi
 
 # Cilium needs shared bpffs and cgroup2 mounts that k3s-in-docker nodes lack.
@@ -35,6 +37,18 @@ helm repo add cilium https://helm.cilium.io >/dev/null 2>&1 || true
 helm repo update cilium >/dev/null
 helm upgrade --install cilium cilium/cilium --version "$CILIUM_CHART" \
   --namespace kube-system --values platform/cilium/values.yaml --wait --timeout 10m
+
+# Docker can reassign node IPs on restart; Cilium keeps the old ones until its agents restart.
+node_ips=$(kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}={.status.addresses[?(@.type=="InternalIP")].address}{"\n"}{end}' | sort)
+cilium_ips=$(kubectl get ciliumnodes -o jsonpath='{range .items[*]}{.metadata.name}={.spec.addresses[?(@.type=="InternalIP")].ip}{"\n"}{end}' | sort)
+if [ "$node_ips" != "$cilium_ips" ]; then
+  echo "node IPs changed, restarting Cilium and workloads"
+  kubectl -n kube-system rollout restart ds/cilium deploy/cilium-operator deploy/hubble-relay deploy/coredns
+  kubectl -n kube-system rollout status ds/cilium --timeout=300s
+  for ns in observability falco shop; do
+    kubectl get ns "$ns" >/dev/null 2>&1 && kubectl -n "$ns" rollout restart deploy,ds,sts >/dev/null 2>&1 || true
+  done
+fi
 
 kubectl wait --for=condition=Ready nodes --all --timeout=300s
 kubectl get nodes -o wide
