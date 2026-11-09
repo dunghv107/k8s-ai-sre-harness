@@ -9,6 +9,10 @@ Deployment).
 | `OPENAI_MODEL` | `gpt-6.1-terra` | default sub-agent model |
 | `OPENAI_MODEL_ESCALATE` | `gpt-6.1-sol` | protected (security) incidents |
 | `AGENT_DAILY_COST_CAP_USD` | `2` | per local day |
+| `OPENAI_BASE_URL` | empty (OpenAI) | OpenAI-compatible endpoint of a self-hosted model; `OPENAI_API_KEY` is then optional |
+| `LLM_API` | `responses` | `responses` (Responses API) or `chat` (Chat Completions, for vLLM, Ollama, llama.cpp, LiteLLM) |
+| `LLM_PRICES` | empty | `model=in/out,...` USD per 1M tokens; unlisted models are billed at the dearest known rate |
+| `AGENT_DAILY_RUN_CAP` | `0` (off) | model runs per local day; bounds load when a self-hosted model costs 0 USD |
 | `TELEGRAM_BOT_TOKEN` | — (Secret) | bot |
 | `TELEGRAM_ALERT_CHAT_ID` | — (Secret) | group |
 | `TELEGRAM_ALLOWED_USER_IDS` | empty | command allow-list (US4) |

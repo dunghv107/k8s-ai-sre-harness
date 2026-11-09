@@ -11,7 +11,7 @@ from . import gate, intake
 from .config import Settings, cost_usd
 from .holmes import run_holmes
 from .pack import build_pack
-from .render import render_cost_cap, render_diagnosis, render_out_of_scope
+from .render import render_cost_cap, render_diagnosis, render_out_of_scope, render_run_cap
 from .store import Store, now_iso, parse_iso
 from .subagent import Run, run_subagent, unknown_verdict
 from .telegram import Telegram
@@ -185,9 +185,8 @@ class Orchestrator:
             return await self._fallback(incidents, context, pack)
         if engine == "holmes":
             out = await self._holmes(incidents, context, pack)
-            if out is None:  # cost cap: nothing was diagnosed, report the cap itself
-                spent = await self.store.cost_today(self.s.timezone)
-                return await self._finish(incidents, None, render_cost_cap(incidents, spent, self.s.daily_cost_cap_usd), "reported_only")
+            if out is None:  # a daily cap: nothing was diagnosed, report the cap itself
+                return await self._finish(incidents, None, (await self._cap(incidents))[1], "reported_only")
             return await self._conclude(incidents, *out[:3], seconds=out[3], tag=None)
         # both: each engine posts as soon as it finishes; the incident's verdict is the native one.
         await asyncio.gather(self._native_and_report(incidents, context, pack, tag="native"), self._holmes_and_post(incidents, context, pack))
@@ -217,28 +216,42 @@ class Orchestrator:
     async def _native(self, incidents: list[dict], context: dict, pack: str):
         """One OpenAI tool loop (Sol for protected incidents); returns (run, model, cost, seconds) or None when the cost cap stopped it."""
         model = self.s.openai_model_escalate if any(i["protected"] for i in incidents) else self.s.openai_model
-        spent = await self.store.cost_today(self.s.timezone)
-        if spent >= self.s.daily_cost_cap_usd:
-            await self._record(incidents[0], model, Run(verdict=unknown_verdict("trần chi phí"), outcome="cost_cap"), 0.0)
-            await self._finish(incidents, None, render_cost_cap(incidents, spent, self.s.daily_cost_cap_usd), "reported_only")
+        capped = await self._cap(incidents)
+        if capped:
+            outcome, text = capped
+            reason = "trần chi phí" if outcome == "cost_cap" else "trần số lần chạy"
+            await self._record(incidents[0], model, Run(verdict=unknown_verdict(reason), outcome=outcome), 0.0)
+            await self._finish(incidents, None, text, "reported_only")
             return None
         started = time.monotonic()
         run = await run_subagent(incidents, context, model, settings=self.s, client=self.client, toolbox=self.toolbox, pack=pack)
         took = time.monotonic() - started
-        cost = cost_usd(model, run.input_tokens, run.output_tokens)
+        cost = cost_usd(model, run.input_tokens, run.output_tokens, self.s.prices)
         await self._record(incidents[0], model, run, cost, took)
         return run, model, cost, took
 
     async def _holmes(self, incidents: list[dict], context: dict, pack: str = ""):
         """One HolmesGPT request; returns (run, label, cost, seconds), or None when the cost cap stopped it."""
-        if await self.store.cost_today(self.s.timezone) >= self.s.daily_cost_cap_usd:
+        if await self._cap(incidents):
             return None
         started = time.monotonic()
         run = await run_holmes(incidents, context, settings=self.s, client=self.holmes_client, pack=pack)
         seconds = time.monotonic() - started
-        cost = cost_usd(self.s.openai_model, run.input_tokens, run.output_tokens)
+        cost = cost_usd(self.s.openai_model, run.input_tokens, run.output_tokens, self.s.prices)
         await self._record(incidents[0], self.s.openai_model, run, cost, seconds, engine="holmes")
         return run, f"holmes/{self.s.openai_model}", cost, seconds
+
+    async def _cap(self, incidents: list[dict]) -> tuple[str, str] | None:
+        """(outcome, message) when a daily cap stops model calls, else None. The run cap matters for a self-hosted model,
+        whose cost is 0 USD so the cost cap never trips; it bounds GPU load instead."""
+        spent = await self.store.cost_today(self.s.timezone)
+        if spent >= self.s.daily_cost_cap_usd:
+            return "cost_cap", render_cost_cap(incidents, spent, self.s.daily_cost_cap_usd)
+        if self.s.daily_run_cap:
+            runs = await self.store.runs_today(self.s.timezone)
+            if runs >= self.s.daily_run_cap:
+                return "run_cap", render_run_cap(incidents, runs, self.s.daily_run_cap)
+        return None
 
     async def _holmes_and_post(self, incidents: list[dict], context: dict, pack: str = "") -> None:
         try:

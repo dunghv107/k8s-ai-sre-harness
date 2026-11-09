@@ -66,7 +66,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not settings.demo_mode:
             from openai import AsyncOpenAI
 
-            client = AsyncOpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url, timeout=60)
+            # The SDK refuses an empty key; a keyless self-hosted endpoint ignores this placeholder.
+            client = AsyncOpenAI(api_key=settings.openai_api_key or "unused", base_url=settings.openai_base_url, timeout=60)
         orchestrator = Orchestrator(settings, store, k8s, telemetry, telegram, client)
         await orchestrator.recover()
         app.state.store, app.state.orchestrator = store, orchestrator

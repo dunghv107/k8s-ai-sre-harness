@@ -43,6 +43,11 @@ spec:
               app: holmes
       ports:
         - {protocol: TCP, port: 5050}
+    # Self-hosted model endpoint inside the private ranges closed below; uncomment and set its address and port.
+    # - to:
+    #     - ipBlock: {cidr: 10.20.30.40/32}
+    #   ports:
+    #     - {protocol: TCP, port: 8000}
     # OpenAI and Telegram over HTTPS; private ranges stay closed.
     - to:
         - ipBlock:

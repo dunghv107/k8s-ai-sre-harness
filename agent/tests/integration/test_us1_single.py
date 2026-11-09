@@ -108,6 +108,21 @@ async def test_cost_cap_reports_without_a_model_call(make_harness, fakes):
     assert [r["outcome"] for r in await h.runs()] == ["ok", "cost_cap"]
 
 
+async def test_run_cap_stops_a_free_model(make_harness, fakes):
+    # Self-hosted model priced at 0 USD: the cost cap never trips, the run cap bounds GPU load instead.
+    h = make_harness(daily_run_cap=1, model_prices=(("gpt-6.1-terra", 0.0, 0.0),))
+    from alert_agent.store import now_iso
+
+    await h.store.upsert_incident({"key": "old", "state": "resolved", "first_seen": "2026-01-01T00:00:00+00:00", "last_seen": "2026-01-01T00:00:00+00:00"})
+    await h.store.record_run({"incident_id": 1, "model": "gpt-6.1-terra", "started_at": now_iso(), "finished_at": now_iso(), "tool_calls": 1,
+                              "input_tokens": 1, "output_tokens": 1, "cost_usd": 0.0, "outcome": "ok"})
+    await post_fixture(h, "am_5xx_firing.json")
+    await h.settle()
+    assert fakes.openai.route.call_count == 0
+    assert "trần số lần chạy" in fakes.telegram_bodies[0]["text"]
+    assert [r["outcome"] for r in await h.runs()] == ["ok", "run_cap"]
+
+
 async def test_demo_mode_makes_no_openai_or_telegram_calls(make_harness, fakes):
     h = make_harness(demo_mode=True, openai_api_key="", telegram_bot_token="", telegram_chat_id="")
     await post_fixture(h, "am_5xx_firing.json")

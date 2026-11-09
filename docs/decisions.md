@@ -46,6 +46,9 @@ decision and what was given up.
   never whole log files.
 - **Trade-off:** data leaves the production-replica lab (redacted). A local model would avoid that but needs GPU/RAM the
   host does not have.
+- **Update:** the provider is a setting, not a code change. `OPENAI_BASE_URL` + `LLM_API=chat` point the same tool loop
+  at any OpenAI-compatible self-hosted server (vLLM, Ollama, LiteLLM); `LLM_PRICES` and `AGENT_DAILY_RUN_CAP` keep the
+  caps meaningful when the model costs 0 USD. Redaction stays on: the model server may log prompts.
 
 ## D-07 · Telegram with long polling
 

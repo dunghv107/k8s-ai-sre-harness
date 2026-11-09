@@ -10,9 +10,11 @@ set -a
 # shellcheck disable=SC1090
 . <(tr -d '\r' < .env)
 set +a
-for v in OPENAI_API_KEY TELEGRAM_BOT_TOKEN TELEGRAM_ALERT_CHAT_ID; do
+for v in TELEGRAM_BOT_TOKEN TELEGRAM_ALERT_CHAT_ID; do
   [ -n "${!v:-}" ] || { echo "$v is empty in .env" >&2; exit 1; }
 done
+# A self-hosted endpoint (OPENAI_BASE_URL, set in deploy/alerting/agent.yaml) may have no key.
+[ -n "${OPENAI_API_KEY:-}" ] || [ -n "${OPENAI_BASE_URL:-}" ] || { echo "OPENAI_API_KEY is empty in .env" >&2; exit 1; }
 
 docker build -t "$IMAGE" agent
 k3d image import -c homelab "$IMAGE"
@@ -20,7 +22,7 @@ k3d image import -c homelab "$IMAGE"
 kubectl apply -f deploy/alerting/namespace.yaml
 # Values reach kubectl only through argv on this machine, never a file in the repo.
 kubectl -n alerting create secret generic alert-agent \
-  --from-literal=OPENAI_API_KEY="$OPENAI_API_KEY" \
+  --from-literal=OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
   --from-literal=TELEGRAM_BOT_TOKEN="${TELEGRAM_AGENT_BOT_TOKEN:-$TELEGRAM_BOT_TOKEN}" \
   --from-literal=TELEGRAM_ALERT_CHAT_ID="$TELEGRAM_ALERT_CHAT_ID" \
   --from-literal=TELEGRAM_ALLOWED_USER_IDS="${TELEGRAM_ALLOWED_USER_IDS:-}" \

@@ -66,3 +66,13 @@ def render_cost_cap(incidents: list[dict], spent: float, cap: float) -> str:
     if any(i["protected"] for i in incidents):
         lines.append(PROTECTED_LINE)
     return "\n".join(lines)
+
+
+def render_run_cap(incidents: list[dict], runs: int, cap: int) -> str:
+    lines = [
+        f"⚠️ <b>Sự cố {_title(incidents)}</b>",
+        f"🚦 Chưa chẩn đoán: đã chạm trần số lần chạy mô hình hôm nay ({runs}/{cap}).",
+    ]
+    if any(i["protected"] for i in incidents):
+        lines.append(PROTECTED_LINE)
+    return "\n".join(lines)

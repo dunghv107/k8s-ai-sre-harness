@@ -6,9 +6,31 @@ from dataclasses import dataclass
 PRICES = {"gpt-6.1-terra": (1.0, 5.0), "gpt-6.1-sol": (2.0, 10.0)}
 
 
-def cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
-    price_in, price_out = PRICES.get(model, max(PRICES.values()))
+def cost_usd(model: str, input_tokens: int, output_tokens: int, extra: dict | None = None) -> float:
+    """`extra` (LLM_PRICES) adds or overrides prices, e.g. 0/0 for a self-hosted model so it is not billed at the dearest rate."""
+    prices = {**PRICES, **(extra or {})}
+    price_in, price_out = prices.get(model, max(PRICES.values()))
     return (input_tokens * price_in + output_tokens * price_out) / 1_000_000
+
+
+def _prices(value: str) -> tuple[tuple[str, float, float], ...]:
+    """LLM_PRICES: "model=in/out,model2=in/out" in USD per 1M tokens."""
+    out = []
+    for item in _list(value):
+        try:
+            model, rate = item.rsplit("=", 1)
+            price_in, price_out = (float(x) for x in rate.split("/"))
+        except ValueError:
+            raise ValueError(f"LLM_PRICES items must look like model=in/out, got {item!r}") from None
+        out.append((model.strip(), price_in, price_out))
+    return tuple(out)
+
+
+def _api(value: str) -> str:
+    value = value.strip().lower()
+    if value not in ("responses", "chat"):
+        raise ValueError(f"LLM_API must be responses or chat, got {value!r}")
+    return value
 
 
 def _bool(value: str) -> bool:
@@ -32,7 +54,12 @@ class Settings:
     openai_model: str = "gpt-6.1-terra"
     openai_model_escalate: str = "gpt-6.1-sol"
     openai_base_url: str | None = None
+    # responses: OpenAI Responses API (stateful, previous_response_id). chat: Chat Completions, which self-hosted servers
+    # (vLLM, Ollama, llama.cpp, LiteLLM) all serve; the agent then resends the conversation itself.
+    llm_api: str = "responses"
+    model_prices: tuple[tuple[str, float, float], ...] = ()
     daily_cost_cap_usd: float = 2.0
+    daily_run_cap: int = 0  # model runs per local day, 0 = off; the guard that still works when a self-hosted model costs 0 USD
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     telegram_allowed_user_ids: tuple[str, ...] = ()
@@ -75,7 +102,11 @@ class Settings:
             openai_api_key=get("OPENAI_API_KEY", d.openai_api_key),
             openai_model=get("OPENAI_MODEL", d.openai_model),
             openai_model_escalate=get("OPENAI_MODEL_ESCALATE", d.openai_model_escalate),
+            openai_base_url=get("OPENAI_BASE_URL", d.openai_base_url),
+            llm_api=get("LLM_API", d.llm_api, _api),
+            model_prices=get("LLM_PRICES", d.model_prices, _prices),
             daily_cost_cap_usd=get("AGENT_DAILY_COST_CAP_USD", d.daily_cost_cap_usd, float),
+            daily_run_cap=get("AGENT_DAILY_RUN_CAP", d.daily_run_cap, int),
             telegram_bot_token=get("TELEGRAM_BOT_TOKEN", d.telegram_bot_token),
             telegram_chat_id=get("TELEGRAM_ALERT_CHAT_ID", d.telegram_chat_id),
             telegram_allowed_user_ids=get("TELEGRAM_ALLOWED_USER_IDS", d.telegram_allowed_user_ids, _list),
@@ -96,12 +127,17 @@ class Settings:
             db_path=get("AGENT_DB_PATH", d.db_path),
         )
 
+    @property
+    def prices(self) -> dict:
+        return {m: (i, o) for m, i, o in self.model_prices}
+
     def missing_credentials(self) -> list[str]:
         """Names of required secrets that are empty; demo mode needs none."""
         if self.demo_mode:
             return []
         need = {
-            "OPENAI_API_KEY": self.openai_api_key,
+            # A self-hosted endpoint (OPENAI_BASE_URL) often has no key.
+            "OPENAI_API_KEY": self.openai_api_key or self.openai_base_url,
             "TELEGRAM_BOT_TOKEN": self.telegram_bot_token,
             "TELEGRAM_ALERT_CHAT_ID": self.telegram_chat_id,
         }

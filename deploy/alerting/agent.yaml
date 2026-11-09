@@ -51,6 +51,12 @@ spec:
             - {name: OPENAI_MODEL, value: gpt-6.1-terra}
             - {name: OPENAI_MODEL_ESCALATE, value: gpt-6.1-sol}
             - {name: AGENT_DAILY_COST_CAP_USD, value: "2"}
+            # Self-hosted model (vLLM, Ollama, LiteLLM): uncomment, set the model names above to the served ones,
+            # and open the endpoint in network-policy.yaml.
+            # - {name: OPENAI_BASE_URL, value: "http://vllm.ai.svc:8000/v1"}
+            # - {name: LLM_API, value: chat}
+            # - {name: LLM_PRICES, value: "qwen3-30b-a3b=0/0"}
+            # - {name: AGENT_DAILY_RUN_CAP, value: "300"}
             - {name: AGENT_TIMEZONE, value: Asia/Ho_Chi_Minh}
             - {name: AGENT_BATCH_WINDOW_SECONDS, value: "60"}
             - {name: AGENT_MAX_PARALLEL_SUBAGENTS, value: "5"}

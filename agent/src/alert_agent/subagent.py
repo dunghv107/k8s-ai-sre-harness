@@ -1,4 +1,4 @@
-"""One sub-agent run: OpenAI Responses tool loop with read-only tools and a validated JSON verdict."""
+"""One sub-agent run: a tool loop (OpenAI Responses or Chat Completions) with read-only tools and a validated JSON verdict."""
 import asyncio
 import json
 import logging
@@ -64,8 +64,11 @@ def unknown_verdict(missing: str) -> dict:
 
 def validate(raw: str, protected: bool) -> dict:
     """Parse and check the verdict; raises ValueError with a message the model can act on."""
-    text = raw.strip()
+    # Self-hosted reasoning models (Qwen3, DeepSeek-R1) may leave <think>...</think> in the text when the server has no reasoning parser.
+    text = re.sub(r"<think>.*?</think>", "", raw, flags=re.S).strip()
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
+    if not text.startswith("{") and "{" in text:  # smaller models sometimes put a sentence before the JSON
+        text = text[text.index("{"): text.rfind("}") + 1]
     try:
         v = json.loads(text)
     except json.JSONDecodeError as e:
@@ -102,10 +105,68 @@ def validate(raw: str, protected: bool) -> dict:
     }
 
 
-def _text(response) -> str:
-    return "".join(
-        part.text for item in response.output if item.type == "message" for part in item.content if part.type == "output_text"
-    )
+@dataclass
+class Reply:
+    calls: list  # (call_id, name, arguments JSON)
+    text: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+class ResponsesAPI:
+    """OpenAI Responses API: the server keeps the conversation, each turn sends only new items plus previous_response_id."""
+
+    def __init__(self, client, model: str, instructions: str):
+        self.client, self.model, self.instructions, self.previous = client, model, instructions, None
+
+    async def ask(self, items: list, tools_allowed: bool = True) -> Reply:
+        kwargs = {"model": self.model, "instructions": self.instructions, "input": items, "tools": TOOL_SPECS}
+        if self.previous:
+            kwargs["previous_response_id"] = self.previous
+        if not tools_allowed:
+            kwargs["tool_choice"] = "none"
+        r = await self.client.responses.create(**kwargs)
+        self.previous = r.id
+        text = "".join(p.text for i in r.output if i.type == "message" for p in i.content if p.type == "output_text")
+        calls = [(i.call_id, i.name, i.arguments) for i in r.output if i.type == "function_call"]
+        usage = (r.usage.input_tokens, r.usage.output_tokens) if r.usage else (0, 0)
+        return Reply(calls, text, *usage)
+
+    @staticmethod
+    def tool_result(call_id: str, output: str) -> dict:
+        return {"type": "function_call_output", "call_id": call_id, "output": output}
+
+
+# Chat Completions wraps the same function schema one level deeper.
+CHAT_TOOLS = [{"type": "function", "function": {k: v for k, v in t.items() if k != "type"}} for t in TOOL_SPECS]
+
+
+class ChatAPI:
+    """Chat Completions: served by vLLM, Ollama, llama.cpp and LiteLLM, so a self-hosted model works by changing
+    OPENAI_BASE_URL only. Stateless, so the agent keeps the message history and resends it each turn."""
+
+    def __init__(self, client, model: str, instructions: str):
+        self.client, self.model = client, model
+        self.messages: list[dict] = [{"role": "system", "content": instructions}]
+
+    async def ask(self, items: list, tools_allowed: bool = True) -> Reply:
+        self.messages.extend(items)
+        kwargs = {"model": self.model, "messages": self.messages, "tools": CHAT_TOOLS}
+        if not tools_allowed:
+            kwargs["tool_choice"] = "none"
+        r = await self.client.chat.completions.create(**kwargs)
+        msg = r.choices[0].message
+        calls = [(c.id, c.function.name, c.function.arguments) for c in (msg.tool_calls or [])]
+        turn = {"role": "assistant", "content": msg.content or ""}
+        if calls:
+            turn["tool_calls"] = [{"id": i, "type": "function", "function": {"name": n, "arguments": a}} for i, n, a in calls]
+        self.messages.append(turn)
+        usage = (r.usage.prompt_tokens, r.usage.completion_tokens) if r.usage else (0, 0)
+        return Reply(calls, msg.content or "", *usage)
+
+    @staticmethod
+    def tool_result(call_id: str, output: str) -> dict:
+        return {"role": "tool", "tool_call_id": call_id, "content": output}
 
 
 def build_prompt(incidents: list[dict], context: dict[int, list[dict]], pack: str = "") -> str:
@@ -139,52 +200,44 @@ async def run_subagent(incidents, context, model: str, *, settings: Settings, cl
 
 async def _loop(run: Run, incidents, context, model, protected, settings, client, toolbox, pack: str = "") -> None:
     instructions = SYSTEM_PROMPT.format(max_calls=settings.max_tool_calls, namespaces=", ".join(settings.namespaces))
+    api = (ChatAPI if settings.llm_api == "chat" else ResponsesAPI)(client, model, instructions)
 
-    async def ask(input_items, previous_id=None, tools_allowed=True):
-        kwargs = {"model": model, "instructions": instructions, "input": input_items, "tools": TOOL_SPECS}
-        if previous_id:
-            kwargs["previous_response_id"] = previous_id
-        if not tools_allowed:
-            kwargs["tool_choice"] = "none"
-        response = await client.responses.create(**kwargs)
-        if response.usage:
-            run.input_tokens += response.usage.input_tokens
-            run.output_tokens += response.usage.output_tokens
-        return response
+    async def ask(items, tools_allowed=True) -> Reply:
+        reply = await api.ask(items, tools_allowed)
+        run.input_tokens += reply.input_tokens
+        run.output_tokens += reply.output_tokens
+        return reply
 
-    response = await ask([{"role": "user", "content": build_prompt(incidents, context, pack)}])
+    reply = await ask([{"role": "user", "content": build_prompt(incidents, context, pack)}])
     rounds = 0
-    while True:
+    while reply.calls:
         rounds += 1
         if rounds > settings.max_tool_calls + 2:
             raise RuntimeError("tool loop did not end")
-        calls = [i for i in response.output if i.type == "function_call"]
-        if not calls:
-            break
         results = []
-        for call in calls:
+        for call_id, name, arguments in reply.calls:
             if run.tool_calls >= settings.max_tool_calls:
                 out = "tool budget exhausted: answer now with the evidence you have"
             else:
                 run.tool_calls += 1
                 try:
-                    args = json.loads(call.arguments)
+                    args = json.loads(arguments)
                 except json.JSONDecodeError:
                     args = {}
                 # Defence in depth: tools redact already, the model must never see an unredacted result.
-                out = redact(await toolbox.call(call.name, args))
-                run.log.append(call.name)
-            results.append({"type": "function_call_output", "call_id": call.call_id, "output": out})
-        response = await ask(results, response.id, tools_allowed=run.tool_calls < settings.max_tool_calls)
+                out = redact(await toolbox.call(name, args))
+                run.log.append(name)
+            results.append(api.tool_result(call_id, out))
+        reply = await ask(results, tools_allowed=run.tool_calls < settings.max_tool_calls)
 
     try:
-        run.verdict = validate(_text(response), protected)
+        run.verdict = validate(reply.text, protected)
         return
     except ValueError as first:
         error = str(first)
     repair = [{"role": "user", "content": f"Your answer was rejected: {error}. Reply with only the corrected JSON object."}]
-    response = await ask(repair, response.id, tools_allowed=False)
+    reply = await ask(repair, tools_allowed=False)
     try:
-        run.verdict = validate(_text(response), protected)
+        run.verdict = validate(reply.text, protected)
     except ValueError as second:
         run.outcome, run.verdict = "invalid_output", unknown_verdict(f"mô hình trả kết quả không hợp lệ ({second})")

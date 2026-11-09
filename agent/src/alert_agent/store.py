@@ -259,3 +259,10 @@ class Store:
         since = now_iso(local.replace(hour=0, minute=0, second=0, microsecond=0))
         row = await self._run(self._one, "SELECT COALESCE(SUM(cost_usd), 0) AS c FROM runs WHERE started_at >= ?", (since,))
         return float(row["c"])
+
+    async def runs_today(self, tz: str, now: datetime | None = None) -> int:
+        """Model runs since local midnight; runs stopped by a cap never reached the model and are not counted."""
+        local = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo(tz))
+        since = now_iso(local.replace(hour=0, minute=0, second=0, microsecond=0))
+        row = await self._run(self._one, "SELECT COUNT(*) AS n FROM runs WHERE started_at >= ? AND outcome NOT IN ('cost_cap', 'run_cap')", (since,))
+        return int(row["n"])
